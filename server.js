@@ -140,7 +140,7 @@ function handleDatabasePost(req, res) {
         .then(() => send(res, 204))
         .catch((error) => {
           console.error(error);
-          send(res, 500, "save failed");
+          send(res, 500, error.message || "save failed");
         });
       return;
     }

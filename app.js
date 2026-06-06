@@ -335,11 +335,11 @@ async function importFile(event, type) {
     rebuildSummaryTables();
     const persisted = await persistDatabase();
     await refreshAll();
-    setStatus(persisted.server
+    setStatus(persisted.server.ok
       ? `הייבוא הסתיים: ${rows.length.toLocaleString("he-IL")} שורות`
       : `הייבוא נשמר בדפדפן בלבד: ${rows.length.toLocaleString("he-IL")} שורות. יש לבדוק שמירה לענן.`);
-    if (!persisted.server) {
-      alert("הנתונים נשמרו בדפדפן הזה בלבד, אבל לא נשמרו לענן. לכן הם לא יופיעו במובייל. יש לבדוק את משתני Supabase ב-Render ואת ה-Logs.");
+    if (!persisted.server.ok) {
+      alert(`הנתונים נשמרו בדפדפן הזה בלבד, אבל לא נשמרו לענן. לכן הם לא יופיעו במובייל.\n\nשגיאת שמירה: ${persisted.server.error || "לא ידוע"}`);
     }
   } catch (error) {
     console.error(error);
@@ -1089,9 +1089,10 @@ async function writeServerDatabase(data) {
       headers: { "Content-Type": "application/octet-stream" },
       body: data,
     });
-    return response.ok;
+    if (response.ok) return { ok: true };
+    return { ok: false, error: await response.text() };
   } catch (error) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
-    return false;
+    return { ok: false, error: error.message };
   }
 }
