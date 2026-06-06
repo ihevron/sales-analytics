@@ -150,14 +150,13 @@ function createSchema() {
 
 function repairShiftedMonthData() {
   const repairKey = "shift_month_data_forward_v2";
-  const alreadyRepaired = scalar("SELECT COUNT(*) FROM app_metadata WHERE key = ?", [repairKey]);
-  if (alreadyRepaired) return false;
 
   const previousMonthStart = firstDayOfPreviousMonth();
   const monthBeforePreviousStart = addMonths(previousMonthStart, -1);
   const previousMonth = monthKey(previousMonthStart);
   const monthBeforePrevious = monthKey(monthBeforePreviousStart);
   const currentMonth = monthKey(firstDayOfCurrentMonth());
+  const currentMonthStart = toSqlDate(firstDayOfCurrentMonth());
   const stats = firstRow(`
     SELECT
       COUNT(*) AS row_count,
@@ -176,9 +175,9 @@ function repairShiftedMonthData() {
     state.db.run(`
       UPDATE sales_raw
       SET sale_date = DATE(SUBSTR(sale_date, 1, 7) || '-01', '+1 month')
-      WHERE sale_date < DATE('now', 'start of month')
-    `);
-    state.db.run("INSERT INTO app_metadata (key, value) VALUES (?, ?)", [repairKey, "repaired"]);
+      WHERE sale_date < ?
+    `, [currentMonthStart]);
+    state.db.run("INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)", [repairKey, new Date().toISOString()]);
     return true;
   }
 
@@ -328,7 +327,10 @@ async function importFile(event, type) {
   try {
     setStatus("קורא קובץ");
     const rows = await readWorkbook(file);
-    if (type === "sales") importSalesRows(rows);
+    if (type === "sales") {
+      importSalesRows(rows);
+      repairShiftedMonthData();
+    }
     if (type === "products") importProductRows(rows);
     rebuildSummaryTables();
     await persistDatabase();

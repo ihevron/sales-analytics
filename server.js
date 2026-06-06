@@ -9,6 +9,11 @@ const legacyDbPath = path.join(root, "sales-analytics.sqlite");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "0.0.0.0";
 const maxDbBytes = Number(process.env.MAX_DB_BYTES || 1024 * 1024 * 1024);
+const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseBucket = process.env.SUPABASE_BUCKET || "sales-analytics";
+const supabaseDbObject = process.env.SUPABASE_DB_OBJECT || "sales-analytics.sqlite";
+const useSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey);
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -31,7 +36,62 @@ function sendJson(res, status, body) {
   send(res, status, JSON.stringify(body), { "Content-Type": "application/json; charset=utf-8" });
 }
 
-function handleDatabaseGet(res) {
+function supabaseObjectUrl() {
+  const objectPath = supabaseDbObject.split("/").map(encodeURIComponent).join("/");
+  return `${supabaseUrl}/storage/v1/object/${encodeURIComponent(supabaseBucket)}/${objectPath}`;
+}
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: supabaseServiceRoleKey,
+    Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    ...extra,
+  };
+}
+
+async function readDatabaseFromSupabase() {
+  const response = await fetch(supabaseObjectUrl(), {
+    headers: supabaseHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = new Error(`supabase read failed: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function writeDatabaseToSupabase(body) {
+  const response = await fetch(supabaseObjectUrl(), {
+    method: "POST",
+    headers: supabaseHeaders({
+      "Content-Type": "application/octet-stream",
+      "x-upsert": "true",
+    }),
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`supabase write failed: ${response.status} ${await response.text()}`);
+  }
+}
+
+async function handleDatabaseGet(res) {
+  if (useSupabase) {
+    try {
+      const data = await readDatabaseFromSupabase();
+      send(res, 200, data, {
+        "Content-Type": "application/octet-stream",
+        "Cache-Control": "no-store",
+      });
+    } catch (error) {
+      send(res, error.status === 404 ? 404 : 500, error.status === 404 ? "" : "database read failed");
+    }
+    return;
+  }
+
   fs.readFile(dbPath, (error, data) => {
     if (error) {
       send(res, 404);
@@ -41,6 +101,17 @@ function handleDatabaseGet(res) {
       "Content-Type": "application/octet-stream",
       "Cache-Control": "no-store",
     });
+  });
+}
+
+function writeDatabaseToDisk(body, callback) {
+  const tempPath = `${dbPath}.tmp`;
+  fs.writeFile(tempPath, body, (writeError) => {
+    if (writeError) {
+      callback(writeError);
+      return;
+    }
+    fs.rename(tempPath, dbPath, callback);
   });
 }
 
@@ -64,19 +135,22 @@ function handleDatabasePost(req, res) {
       return;
     }
 
-    const tempPath = `${dbPath}.tmp`;
-    fs.writeFile(tempPath, body, (writeError) => {
-      if (writeError) {
+    if (useSupabase) {
+      writeDatabaseToSupabase(body)
+        .then(() => send(res, 204))
+        .catch((error) => {
+          console.error(error);
+          send(res, 500, "save failed");
+        });
+      return;
+    }
+
+    writeDatabaseToDisk(body, (error) => {
+      if (error) {
         send(res, 500, "save failed");
         return;
       }
-      fs.rename(tempPath, dbPath, (renameError) => {
-        if (renameError) {
-          send(res, 500, "save failed");
-          return;
-        }
-        send(res, 204);
-      });
+      send(res, 204);
     });
   });
 
@@ -118,7 +192,10 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.url === "/api/db" && req.method === "GET") {
-    handleDatabaseGet(res);
+    handleDatabaseGet(res).catch((error) => {
+      console.error(error);
+      send(res, 500, "database read failed");
+    });
     return;
   }
 
@@ -137,5 +214,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   console.log(`Sales Analytics is running on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
-  console.log(`Database path: ${dbPath}`);
+  console.log(useSupabase ? `Database storage: Supabase ${supabaseBucket}/${supabaseDbObject}` : `Database path: ${dbPath}`);
 });

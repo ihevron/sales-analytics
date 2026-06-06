@@ -1,6 +1,6 @@
 # מערכת ניתוח מכירות
 
-אפליקציית ניתוח מכירות בעברית מלאה, RTL, עם ייבוא Excel, SQL מקומי בדפדפן ו-DB משותף דרך שרת Node.
+אפליקציית ניתוח מכירות בעברית מלאה, RTL, עם ייבוא Excel, ניתוחים מהירים על בסיס SQLite בדפדפן, ושמירת DB דרך שרת Node.
 
 ## הרצה מקומית
 
@@ -15,13 +15,7 @@ npm start
 http://localhost:4173/
 ```
 
-כתובת למובייל באותה רשת:
-
-```text
-http://192.168.7.14:4173/
-```
-
-## הרצת פרודקשן בשרת
+## פרודקשן מקומי עם קובץ DB
 
 ```powershell
 $env:NODE_ENV="production"
@@ -37,7 +31,31 @@ npm start
 DATA_DIR\sales-analytics.sqlite
 ```
 
-חשוב להגדיר את `DATA_DIR` לתיקייה קבועה שמגובה ולא נמחקת בפריסה.
+## Render עם Supabase Storage
+
+זה המסלול המומלץ כשאין Persistent Disk בתוכנית החינמית של Render.
+Render מריץ את האפליקציה, ו-Supabase שומר את קובץ ה-SQLite באופן קבוע.
+
+1. צור פרויקט Supabase.
+2. ב-Supabase, עבור אל Storage וצור bucket פרטי בשם:
+
+```text
+sales-analytics
+```
+
+3. ב-Render, הוסף Environment Variables:
+
+```text
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+SUPABASE_BUCKET=sales-analytics
+SUPABASE_DB_OBJECT=sales-analytics.sqlite
+NODE_ENV=production
+HOST=0.0.0.0
+MAX_DB_BYTES=1073741824
+```
+
+חשוב: `SUPABASE_SERVICE_ROLE_KEY` הוא סודי. לשים אותו רק ב-Render Environment Variables, לא ב-GitHub ולא בקוד צד לקוח.
 
 ## Docker
 
@@ -54,8 +72,8 @@ http://localhost:4173/healthz
 
 ## הערות שימוש
 
-- ייבוא מכירות ומוצרים דורס את הנתונים הקיימים באותה טבלה.
-- ההמלצות הידניות נשמרות ואינן נמחקות בייבוא.
+- ייבוא מכירות או מוצרים דורס את הנתונים הקיימים באותה טבלה.
+- המלצות המכירה הידניות נשמרות ואינן נמחקות בייבוא.
 - הממוצעים מחושבים לפי חודשים מלאים אחרונים בלבד. חודש נוכחי חלקי לא נכנס לממוצעים.
+- אחרי ייבוא מכירות האפליקציה בודקת מחדש אם צריך תיקון הזחת חודש.
 - מסכי UI אינם מציגים את טבלת `sales_raw` הגולמית.
-- קובצי Excel נקראים באמצעות SheetJS, והאגרגציות מתבצעות ב-sql.js.
