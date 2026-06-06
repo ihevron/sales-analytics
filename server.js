@@ -187,7 +187,15 @@ function handleStatic(req, res) {
 
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      storage: useSupabase ? "supabase" : "disk",
+      supabase: {
+        configured: useSupabase,
+        bucket: supabaseBucket,
+        object: supabaseDbObject,
+      },
+    });
     return;
   }
 

@@ -333,9 +333,14 @@ async function importFile(event, type) {
     }
     if (type === "products") importProductRows(rows);
     rebuildSummaryTables();
-    await persistDatabase();
+    const persisted = await persistDatabase();
     await refreshAll();
-    setStatus(`הייבוא הסתיים: ${rows.length.toLocaleString("he-IL")} שורות`);
+    setStatus(persisted.server
+      ? `הייבוא הסתיים: ${rows.length.toLocaleString("he-IL")} שורות`
+      : `הייבוא נשמר בדפדפן בלבד: ${rows.length.toLocaleString("he-IL")} שורות. יש לבדוק שמירה לענן.`);
+    if (!persisted.server) {
+      alert("הנתונים נשמרו בדפדפן הזה בלבד, אבל לא נשמרו לענן. לכן הם לא יופיעו במובייל. יש לבדוק את משתני Supabase ב-Render ואת ה-Logs.");
+    }
   } catch (error) {
     console.error(error);
     setStatus("שגיאה בייבוא הקובץ");
@@ -1059,7 +1064,8 @@ function readBrowserDatabase() {
 
 async function persistDatabase() {
   const data = state.db.export();
-  await Promise.all([writeBrowserDatabase(data), writeServerDatabase(data)]);
+  const [, server] = await Promise.all([writeBrowserDatabase(data), writeServerDatabase(data)]);
+  return { server };
 }
 
 function writeBrowserDatabase(data) {
@@ -1078,12 +1084,14 @@ function writeBrowserDatabase(data) {
 
 async function writeServerDatabase(data) {
   try {
-    await fetch("/api/db", {
+    const response = await fetch("/api/db", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: data,
     });
+    return response.ok;
   } catch (error) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
+    return false;
   }
 }
