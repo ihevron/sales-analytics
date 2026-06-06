@@ -9,7 +9,7 @@ const legacyDbPath = path.join(root, "sales-analytics.sqlite");
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "0.0.0.0";
 const maxDbBytes = Number(process.env.MAX_DB_BYTES || 1024 * 1024 * 1024);
-const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL || "");
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseBucket = process.env.SUPABASE_BUCKET || "sales-analytics";
 const supabaseDbObject = process.env.SUPABASE_DB_OBJECT || "sales-analytics.sqlite";
@@ -25,6 +25,22 @@ const types = {
 fs.mkdirSync(dataDir, { recursive: true });
 if (!fs.existsSync(dbPath) && fs.existsSync(legacyDbPath)) {
   fs.copyFileSync(legacyDbPath, dbPath);
+}
+
+function normalizeSupabaseUrl(rawUrl) {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return "";
+
+  try {
+    const parsed = new URL(trimmed);
+    const dashboardProject = parsed.pathname.match(/\/dashboard\/project\/([^/]+)/);
+    if (dashboardProject) {
+      return `https://${dashboardProject[1]}.supabase.co`;
+    }
+    return `${parsed.protocol}//${parsed.host}`.replace(/\/+$/, "");
+  } catch (error) {
+    return trimmed.replace(/\/+$/, "");
+  }
 }
 
 function send(res, status, body = "", headers = {}) {
@@ -192,6 +208,7 @@ const server = http.createServer((req, res) => {
       storage: useSupabase ? "supabase" : "disk",
       supabase: {
         configured: useSupabase,
+        host: supabaseUrl ? new URL(supabaseUrl).host : "",
         bucket: supabaseBucket,
         object: supabaseDbObject,
       },
