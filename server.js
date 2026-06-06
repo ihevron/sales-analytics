@@ -58,11 +58,16 @@ function supabaseObjectUrl() {
 }
 
 function supabaseHeaders(extra = {}) {
-  return {
+  const headers = {
     apikey: supabaseServiceRoleKey,
-    Authorization: `Bearer ${supabaseServiceRoleKey}`,
     ...extra,
   };
+
+  if (!supabaseServiceRoleKey.startsWith("sb_secret_")) {
+    headers.Authorization = `Bearer ${supabaseServiceRoleKey}`;
+  }
+
+  return headers;
 }
 
 async function readDatabaseFromSupabase() {
