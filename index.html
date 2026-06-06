@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>מערכת ניתוח מכירות</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="תפריט ראשי">
+        <div class="brand">
+          <span class="brand-mark">₪</span>
+          <div>
+            <strong>ניתוח מכירות</strong>
+            <small>סוכני מכירות</small>
+          </div>
+        </div>
+        <nav class="main-nav">
+          <button class="nav-item active" data-screen="dashboard">דשבורד</button>
+          <button class="nav-item" data-screen="customer-search">חיפוש לקוח</button>
+          <button class="nav-item" data-screen="customer-analysis">ניתוח לקוחות</button>
+          <button class="nav-item" data-screen="products">מוצרים</button>
+          <button class="nav-item" data-screen="supplier-analysis">ניתוח ספקים</button>
+          <button class="nav-item" data-screen="recommendations">המלצות מכירה</button>
+        </nav>
+        <div class="import-panel">
+          <input id="sales-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+          <input id="products-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+          <button class="primary-action" id="import-sales">ייבוא נתוני מכירות</button>
+          <button class="secondary-action" id="import-products">ייבוא נתוני מוצרים</button>
+          <p id="import-status" class="status-text">מוכן לייבוא נתונים</p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <button id="menu-toggle" class="icon-button" aria-label="פתיחת תפריט">☰</button>
+          <div>
+            <h1 id="screen-title">דשבורד</h1>
+            <p id="screen-subtitle">ברירת מחדל: 6 חודשים מלאים אחרונים</p>
+          </div>
+        </header>
+
+        <section id="dashboard" class="screen active-screen">
+          <div class="metrics-grid" id="dashboard-cards"></div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>טבלת רווחיות חודשית</h2>
+            </div>
+            <div class="table-wrap">
+              <table id="monthly-table"></table>
+            </div>
+          </div>
+
+          <div class="two-column">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>10 הלקוחות הרווחיים ביותר</h2>
+              </div>
+              <div class="table-wrap">
+                <table id="top-profit-table"></table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <h2>10 הלקוחות עם אחוז החזרות הגבוה ביותר</h2>
+              </div>
+              <div class="table-wrap">
+                <table id="top-returns-table"></table>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>10 הפריטים הרווחיים ביותר</h2>
+            </div>
+            <div class="table-wrap">
+              <table id="top-products-table"></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="customer-search" class="screen">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="segmented" data-period-target="customer-search" role="group" aria-label="בחירת תקופה">
+                <button data-months="3">3 חודשים</button>
+                <button data-months="6" class="active">6 חודשים</button>
+                <button data-months="12">12 חודשים</button>
+              </div>
+            </div>
+            <div class="search-row">
+              <input id="customer-query" type="search" placeholder="שם לקוח או מס' לקוח" />
+              <button class="primary-action" id="customer-search-button">חיפוש</button>
+            </div>
+            <div class="table-wrap">
+              <table id="customers-results-table"></table>
+            </div>
+          </div>
+
+          <div id="customer-card" class="panel hidden">
+            <div class="panel-header split">
+              <div>
+                <h2 id="customer-card-title">כרטיס לקוח</h2>
+                <p id="customer-card-subtitle"></p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table id="customer-products-table"></table>
+            </div>
+            <div class="recommendations-box">
+              <h3>המלצות מכירה</h3>
+              <ul id="customer-recommendations"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="customer-analysis" class="screen">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="segmented" data-period-target="customer-analysis" role="group" aria-label="בחירת תקופה">
+                <button data-months="3">3 חודשים</button>
+                <button data-months="6" class="active">6 חודשים</button>
+                <button data-months="12">12 חודשים</button>
+              </div>
+              <input id="analysis-query" type="search" placeholder="חיפוש לפי שם לקוח" />
+            </div>
+            <div class="table-wrap">
+              <table id="analysis-table"></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="products" class="screen">
+          <div class="panel">
+            <div class="toolbar product-toolbar">
+              <input id="product-query" type="search" placeholder="חיפוש מוצר או מק״ט" />
+              <select id="supplier-filter" aria-label="סינון לפי ספק">
+                <option value="">כל הספקים</option>
+              </select>
+              <select id="category-filter" aria-label="סינון לפי קטגוריה">
+                <option value="">כל הקטגוריות</option>
+              </select>
+            </div>
+            <div class="table-wrap">
+              <table id="products-table"></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="supplier-analysis" class="screen">
+          <div class="panel">
+            <div class="toolbar product-toolbar">
+              <div class="segmented" data-period-target="supplier" role="group" aria-label="בחירת תקופה">
+                <button data-months="3">3 חודשים</button>
+                <button data-months="6" class="active">6 חודשים</button>
+                <button data-months="12">12 חודשים</button>
+              </div>
+              <input id="supplier-analysis-query" type="search" placeholder="חיפוש ספק או מוצר" />
+              <select id="supplier-analysis-filter" aria-label="סינון לפי ספק">
+                <option value="">כל הספקים</option>
+              </select>
+            </div>
+            <div class="table-wrap">
+              <table id="supplier-analysis-table"></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="recommendations" class="screen">
+          <div class="panel">
+            <form id="recommendation-form" class="recommendation-form">
+              <input type="hidden" id="recommendation-id" />
+              <label>
+                טקסט המלצה
+                <textarea id="recommendation-text" required rows="3"></textarea>
+              </label>
+              <label class="checkbox-label">
+                <input id="recommendation-active" type="checkbox" checked />
+                פעיל
+              </label>
+              <div class="form-actions">
+                <button class="primary-action" type="submit">שמירה</button>
+                <button class="secondary-action" type="button" id="recommendation-reset">הוספה</button>
+              </div>
+            </form>
+            <div class="table-wrap">
+              <table id="recommendations-table"></table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

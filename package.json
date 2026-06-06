@@ -1,0 +1,14 @@
+{
+  "name": "hebrew-sales-analytics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hebrew RTL sales analytics application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check app.js && node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

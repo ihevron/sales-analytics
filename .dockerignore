@@ -1,0 +1,5 @@
+data
+sales-analytics.sqlite
+*.tmp
+node_modules
+npm-debug.log
