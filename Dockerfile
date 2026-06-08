@@ -8,6 +8,7 @@ ENV DATA_DIR=/data
 
 COPY package.json ./
 COPY index.html app.js styles.css server.js README.md ./
+COPY management ./management
 
 RUN mkdir -p /data
 VOLUME ["/data"]
