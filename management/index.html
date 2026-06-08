@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>מערכת ניהול מכירות ולקוחות</title>
+    <link rel="icon" type="image/png" href="./wa-logo.png" />
+    <link rel="apple-touch-icon" href="./wa-logo.png" />
+    <link rel="stylesheet" href="./styles.css?v=20260608d" />
+    <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script defer src="./app.js?v=20260608f"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="תפריט ראשי">
+        <div class="brand">
+          <img class="brand-logo" src="./wa-logo.png" alt="" />
+          <div>
+            <strong>ניהול מכירות ולקוחות</strong>
+            <small>מערכת תפעול לסוכנים</small>
+          </div>
+        </div>
+        <nav class="main-nav">
+          <button class="nav-item active" data-screen="dashboard">דשבורד</button>
+          <button class="nav-item" data-screen="customer-search">ניתוח לקוחות</button>
+          <button class="nav-item" data-screen="order-create">יצירת הזמנה</button>
+          <button class="nav-item" data-screen="picking">ליקוט הזמנות</button>
+          <button class="nav-item" data-screen="order-history">הזמנות בתהליך</button>
+          <button class="nav-item" data-screen="calls">ניהול שיחות</button>
+          <button class="nav-item" data-screen="products">מוצרים</button>
+          <button class="nav-item" data-screen="recommendations">המלצות מכירה</button>
+        </nav>
+        <div class="import-panel">
+          <input id="sales-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+          <input id="products-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+          <button class="primary-action" id="import-sales">ייבוא נתוני מכירות</button>
+          <button class="secondary-action" id="import-products">ייבוא נתוני מוצרים</button>
+          <p id="import-status" class="status-text">טוען בסיס נתונים</p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <button id="menu-toggle" class="icon-button" aria-label="פתיחת תפריט">☰</button>
+          <div>
+            <h1 id="screen-title">דשבורד</h1>
+            <p id="screen-subtitle">תמונת מצב ל-12 חודשים אחרונים</p>
+          </div>
+        </header>
+
+        <section id="dashboard" class="screen active-screen">
+          <div class="toolbar">
+            <div class="segmented" data-period-target="dashboard" role="group" aria-label="בחירת תקופה לדשבורד">
+              <button data-months="3">3 חודשים</button>
+              <button data-months="6" class="active">6 חודשים</button>
+              <button data-months="12">12 חודשים</button>
+            </div>
+          </div>
+          <div class="metrics-grid" id="dashboard-cards"></div>
+          <div class="panel">
+            <div class="panel-header"><h2>טבלת רווחיות חודשית</h2></div>
+            <div class="table-wrap"><table id="monthly-table"></table></div>
+          </div>
+          <div class="two-column">
+            <div class="panel">
+              <div class="panel-header"><h2>10 הלקוחות הרווחיים ביותר</h2></div>
+              <div class="table-wrap"><table id="top-profit-table"></table></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><h2>10 הלקוחות עם אחוז החזרות הגבוה ביותר</h2></div>
+              <div class="table-wrap"><table id="top-returns-table"></table></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="customer-search" class="screen">
+          <div class="panel">
+            <div class="toolbar customer-analysis-toolbar">
+              <div class="segmented" data-period-target="customers" role="group" aria-label="בחירת תקופה לניתוח לקוחות">
+                <button data-months="3">3 חודשים</button>
+                <button data-months="6" class="active">6 חודשים</button>
+                <button data-months="12">12 חודשים</button>
+              </div>
+              <input id="customer-query" type="search" placeholder="שם לקוח או מספר לקוח" />
+              <select id="customer-supplier-filter"><option value="">כל הספקים</option></select>
+              <select id="customer-category-filter"><option value="">כל הקטגוריות</option></select>
+              <select id="customer-product-filter"><option value="">כל המוצרים</option></select>
+              <button class="primary-action" id="customer-search-button">חיפוש</button>
+            </div>
+            <div class="table-wrap"><table id="customers-results-table"></table></div>
+          </div>
+
+          <div id="customer-card" class="panel hidden">
+            <div class="panel-header split">
+              <div>
+                <h2 id="customer-card-title">כרטיס לקוח</h2>
+                <p id="customer-card-subtitle"></p>
+              </div>
+              <button class="primary-action" id="customer-card-order">יצירת הזמנה</button>
+            </div>
+            <div class="table-wrap"><table id="customer-products-table"></table></div>
+            <div class="three-column">
+              <div class="sub-panel">
+                <h3>המלצות מכירה</h3>
+                <ul id="customer-recommendations"></ul>
+              </div>
+              <div class="sub-panel">
+                <h3>שיחות אחרונות</h3>
+                <div class="table-wrap"><table id="customer-calls-table"></table></div>
+              </div>
+              <div class="sub-panel">
+                <h3>הזמנות אחרונות</h3>
+                <div class="table-wrap"><table id="customer-orders-table"></table></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="customer-analysis" class="screen hidden">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="segmented" data-period-target="analysis" role="group" aria-label="בחירת תקופה">
+                <button data-months="3">3 חודשים</button>
+                <button data-months="6" class="active">6 חודשים</button>
+                <button data-months="12">12 חודשים</button>
+              </div>
+              <input id="analysis-query" type="search" placeholder="חיפוש לקוח" />
+            </div>
+            <div class="table-wrap"><table id="analysis-table"></table></div>
+          </div>
+        </section>
+
+        <section id="order-create" class="screen">
+          <div class="panel">
+            <div class="order-top-actions">
+              <button class="primary-action" id="order-save">שידור הזמנה</button>
+              <button class="secondary-action" id="order-reset">איפוס</button>
+            </div>
+            <div class="toolbar">
+              <div class="autocomplete-field">
+                <input id="order-customer-query" type="search" placeholder="התחל להקליד שם לקוח או מספר לקוח" autocomplete="off" />
+                <div id="order-customer-results" class="autocomplete-list hidden"></div>
+              </div>
+            </div>
+            <div class="order-summary">
+              <strong id="order-customer-label">לא נבחר לקוח</strong>
+              <span>סכום הזמנה משוער: <b id="order-total">₪0</b></span>
+              <span>רווח משוער: <b id="order-profit">₪0</b></span>
+              <span>סך שורות: <b id="order-lines-total">0</b></span>
+              <span>סך יחידות: <b id="order-units-total">0</b></span>
+            </div>
+            <label class="order-notes-label">
+              הערות להזמנה
+              <textarea id="order-notes" rows="2" placeholder="טקסט חופשי להזמנה"></textarea>
+            </label>
+            <div class="toolbar product-toolbar">
+              <div class="autocomplete-field">
+                <input id="order-product-query" type="search" placeholder="התחל להקליד מוצר או מק״ט" autocomplete="off" />
+                <div id="order-product-results" class="autocomplete-list hidden"></div>
+              </div>
+            </div>
+            <div class="two-column">
+              <div>
+                <div class="panel-header"><h2>שורות הזמנה</h2></div>
+                <div class="table-wrap"><table id="order-items-table"></table></div>
+              </div>
+              <div>
+                <div class="panel-header"><h2>מוצרים מומלצים</h2></div>
+                <div class="table-wrap"><table id="order-suggested-table"></table></div>
+                <div class="order-recommendations-block">
+                  <div class="panel-header"><h2>המלצות מכירה</h2></div>
+                  <ul id="order-recommendations"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="picking" class="screen">
+          <div class="panel">
+            <div class="picking-mode-bar">
+              <div class="segmented">
+                <button class="active" data-picking-mode="orders">לפי הזמנה</button>
+                <button data-picking-mode="product">לפי מוצר</button>
+              </div>
+              <div id="product-picking-controls" class="product-picking-controls hidden">
+                <select id="picking-product-select">
+                  <option value="">בחירת מוצר</option>
+                </select>
+                <select id="picking-category-select">
+                  <option value="">כל הקטגוריות</option>
+                </select>
+              </div>
+            </div>
+            <div id="picking-list" class="picking-list"></div>
+          </div>
+        </section>
+
+        <section id="order-history" class="screen">
+          <div class="panel">
+            <div class="toolbar">
+              <input id="history-query" type="search" placeholder="חיפוש לפי לקוח או מספר הזמנה" />
+            </div>
+            <div class="panel-header"><h2>ממתינות לליקוט</h2></div>
+            <div class="table-wrap"><table id="process-pending-table"></table></div>
+            <div class="panel-header"><h2>הזמנות שלוקטו</h2></div>
+            <div class="table-wrap"><table id="history-table"></table></div>
+            <div class="panel-header process-subtitle"><h2>מוכן למשלוח</h2></div>
+            <div class="table-wrap"><table id="shipping-table"></table></div>
+            <div id="process-order-detail" class="order-detail-panel hidden"></div>
+            <div class="panel-header process-subtitle"><h2>הזמנות שהוחמצו</h2></div>
+            <div id="missed-orders-list" class="missed-orders-list"></div>
+          </div>
+        </section>
+
+        <section id="calls" class="screen">
+          <div class="panel">
+            <form id="call-form" class="inline-form call-form-legacy">
+              <input type="hidden" id="call-id" />
+              <input id="call-date" type="date" />
+              <input id="call-customer-query" type="search" placeholder="לקוח" />
+              <select id="call-customer-select" aria-label="לקוח"></select>
+              <input id="call-status" type="text" placeholder="סטטוס" />
+              <input id="call-notes" type="text" placeholder="הערות" />
+              <button class="primary-action" type="submit">שמירה</button>
+              <button class="secondary-action" type="button" id="call-reset">הוספה</button>
+            </form>
+            <div class="calls-workspace">
+              <div class="calls-topbar">
+                <input id="calls-customers-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+                <button class="secondary-action call-tool-button" id="import-call-customers"><span class="tool-icon">⇧</span> טעינת לקוחות</button>
+                <button class="secondary-action call-tool-button" id="toggle-call-templates"><span class="tool-icon">✎</span> נוסחי WhatsApp</button>
+                <span id="calls-import-status" class="muted-note"></span>
+              </div>
+              <div id="call-template-editor" class="call-template-editor hidden">
+                <div class="template-editor-grid">
+                  <label>נוסח קיים
+                    <select id="call-template-select"></select>
+                  </label>
+                  <label>שם הנוסח
+                    <input id="call-template-title" type="text" placeholder="שם הנוסח" />
+                  </label>
+                </div>
+                <label>טקסט ההודעה
+                  <textarea id="call-template-text" rows="3" placeholder="אפשר להשתמש ב-{שם} או {לקוח}"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button class="primary-action" id="save-call-template" type="button">שמירה</button>
+                  <button class="secondary-action" id="new-call-template" type="button">נוסח חדש</button>
+                  <button class="danger-action" id="delete-call-template" type="button">מחיקה</button>
+                </div>
+              </div>
+              <div class="calls-day-tabs" id="calls-day-tabs"></div>
+              <div class="calls-summary" id="calls-summary"></div>
+              <div class="table-wrap"><table id="calls-table"></table></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="products" class="screen">
+          <div class="panel">
+            <div class="toolbar product-toolbar">
+              <input id="product-query" type="search" placeholder="חיפוש מוצר או מק״ט" />
+              <select id="supplier-filter"><option value="">כל הספקים</option></select>
+              <select id="category-filter"><option value="">כל הקטגוריות</option></select>
+            </div>
+            <div class="table-wrap"><table id="products-table"></table></div>
+          </div>
+        </section>
+
+        <section id="recommendations" class="screen">
+          <div class="panel">
+            <form id="recommendation-form" class="recommendation-form">
+              <input type="hidden" id="recommendation-id" />
+              <label>טקסט המלצה<textarea id="recommendation-text" rows="3" required></textarea></label>
+              <label class="checkbox-label"><input id="recommendation-active" type="checkbox" checked /> פעיל</label>
+              <div class="form-actions">
+                <button class="primary-action" type="submit">שמירה</button>
+                <button class="secondary-action" type="button" id="recommendation-reset">הוספה</button>
+              </div>
+            </form>
+            <div class="table-wrap"><table id="recommendations-table"></table></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="product-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="product-modal-title">
+      <div class="modal">
+        <div class="panel-header">
+          <h2 id="product-modal-title">בחירת מוצר</h2>
+          <button id="product-modal-close" class="icon-button modal-close" aria-label="סגירה">×</button>
+        </div>
+        <div class="product-dialog-grid">
+          <label>
+            שם מוצר
+            <input id="modal-product-name" readonly />
+          </label>
+          <label>
+            מחיר אחרון
+            <input id="modal-product-price" readonly />
+          </label>
+          <label>
+            אחוז חזרות
+            <span id="modal-product-returns" class="readonly-value">0%</span>
+          </label>
+          <label>
+            כמות
+            <input id="modal-product-quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" />
+          </label>
+          <label>
+            הערה
+            <input id="modal-product-note" placeholder="הערה לשורת מוצר" />
+          </label>
+          <label class="modal-check-label">
+            <input id="modal-product-return" type="checkbox" />
+            החזרה
+          </label>
+          <label class="modal-check-label">
+            <input id="modal-product-carton" type="checkbox" />
+            קרטון
+          </label>
+        </div>
+        <div class="form-actions">
+          <button id="product-modal-confirm" class="primary-action">אישור</button>
+          <button id="product-modal-cancel" class="secondary-action">ביטול</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="substitute-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="substitute-modal-title">
+      <div class="modal">
+        <div class="panel-header">
+          <h2 id="substitute-modal-title">חפש מוצר חלופי</h2>
+          <button id="substitute-modal-close" class="icon-button modal-close" aria-label="סגירה">×</button>
+        </div>
+        <div class="autocomplete-field">
+          <input id="substitute-query" type="search" placeholder="חיפוש מוצר חלופי" autocomplete="off" />
+          <div id="substitute-results" class="autocomplete-list substitute-results"></div>
+        </div>
+        <label class="modal-quantity-label">
+          כמות
+          <input id="substitute-quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" value="1" />
+        </label>
+        <div class="form-actions modal-actions">
+          <button id="substitute-modal-confirm" class="primary-action">אישור</button>
+          <button id="substitute-modal-cancel" class="secondary-action">ביטול</button>
+        </div>
+      </div>
+    </div>
+    <div id="carton-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="carton-modal-title">
+      <div class="modal">
+        <div class="panel-header">
+          <h2 id="carton-modal-title">אישור יחידות בקרטון</h2>
+          <button id="carton-modal-close" class="icon-button modal-close" aria-label="סגירה">×</button>
+        </div>
+        <label class="modal-quantity-label">
+          יחידות בקרטון
+          <input id="carton-units-input" type="number" inputmode="numeric" pattern="[0-9]*" min="1" step="1" value="1" />
+        </label>
+        <div class="form-actions modal-actions">
+          <button id="carton-modal-confirm" class="primary-action">אישור</button>
+          <button id="carton-modal-cancel" class="secondary-action">ביטול</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
