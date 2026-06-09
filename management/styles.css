@@ -1357,6 +1357,52 @@ ul {
     min-height: 34px;
   }
   .picking-order-header { grid-template-columns: 1fr; }
+  .picking-order-items {
+    padding: 8px;
+  }
+  .picking-order-items .table-wrap {
+    overflow: visible;
+  }
+  .picking-order-items .compact-table,
+  .product-picking-table {
+    min-width: 0;
+    table-layout: fixed;
+    white-space: normal;
+  }
+  .picking-order-items .compact-table th,
+  .picking-order-items .compact-table td,
+  .product-picking-table th,
+  .product-picking-table td {
+    padding: 6px 4px;
+    font-size: 13px;
+  }
+  .picking-order-items .compact-table th:nth-child(1),
+  .picking-order-items .compact-table td:nth-child(1),
+  .product-picking-table th:nth-last-child(2),
+  .product-picking-table td:nth-last-child(2) {
+    width: 64px;
+  }
+  .picking-order-items .compact-table th:last-child,
+  .picking-order-items .compact-table td:last-child,
+  .product-picking-table th:last-child,
+  .product-picking-table td:last-child {
+    width: 76px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .pick-action {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+  .pick-quantity-input {
+    width: 58px;
+    min-width: 58px;
+  }
+  .pick-product-button {
+    font-size: 13px;
+    line-height: 1.25;
+  }
   .order-top-actions { flex-direction: column; }
   .order-summary {
     gap: 6px;
