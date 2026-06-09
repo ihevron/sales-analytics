@@ -1266,6 +1266,16 @@ function confirmProductDialog() {
   closeProductDialog();
   document.getElementById("order-product-query").value = "";
   renderOrderTables();
+  focusOrderProductSearch();
+}
+
+function focusOrderProductSearch() {
+  if (window.matchMedia("(max-width: 760px)").matches) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementById("order-product-query");
+    input.focus();
+    input.select();
+  });
 }
 
 function productDetailsForOrder(customerNo, sku) {
@@ -1402,10 +1412,20 @@ function renderSuggestedProducts() {
   renderTable("order-suggested-table", rows, [
     { key: "product", label: "מוצר" },
     { key: "quantity", label: "כמות היסטורית", format: numberDisplay },
-    { key: "actions", label: "פעולה", sortable: false, render: (row) => `<button class="small-action" data-suggested-sku="${escapeAttr(row.sku)}">הוספה</button>` },
+    { key: "actions", label: "פעולה", sortable: false, render: (row) => `
+      <div class="suggested-actions">
+        <button class="small-action" data-suggested-sku="${escapeAttr(row.sku)}">הוספה</button>
+        <button class="small-action suggested-remove" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה">הסרה</button>
+      </div>
+    ` },
   ], "suggested", "quantity", "desc");
   document.querySelectorAll("[data-suggested-sku]").forEach((button) => button.addEventListener("click", () => {
     openProductDialog(button.dataset.suggestedSku);
+  }));
+  document.querySelectorAll("[data-dismiss-suggested]").forEach((button) => button.addEventListener("click", () => {
+    state.removedOrderSkus.add(button.dataset.dismissSuggested);
+    renderOrderTables();
+    focusOrderProductSearch();
   }));
 }
 

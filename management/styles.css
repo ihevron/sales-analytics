@@ -232,6 +232,17 @@ th, td {
   padding: 5px 9px;
 }
 
+.suggested-actions {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.suggested-remove {
+  color: var(--danger);
+}
+
 #order-items-table .order-qty-input {
   min-width: 88px;
   max-width: 120px;
