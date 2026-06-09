@@ -1734,7 +1734,7 @@ function renderPickingByProduct() {
                 ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
               </td>
               <td>
-                <input class="pick-quantity-input" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" />
+                <input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" />
                 ${row.is_carton ? `<small class="pick-note">${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
               </td>
               <td>
@@ -1772,7 +1772,7 @@ function pickingOrderItemsHtml(orderId) {
   const totalUnits = pickableRows.reduce((sum, row) => sum + orderLineUnits(row), 0);
   const pendingRows = pending.length ? pending.map((row) => `
     <tr class="${pickingCategoryClass(row.category)}">
-      <td><input class="pick-quantity-input" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
+      <td><input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
       <td>
         <button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
         ${row.is_carton ? `<small class="pick-note">כמות בקרטונים: ${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
@@ -1826,7 +1826,7 @@ function bindPickingActions() {
   document.querySelectorAll("[data-pick-qty]").forEach((input) => {
     input.addEventListener("focus", () => input.select());
     input.addEventListener("change", () => {
-      state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [number(input.value), input.dataset.pickQty]);
+      state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [quantityNumber(input.value), input.dataset.pickQty]);
       schedulePersistDatabase();
     });
   });
@@ -1951,7 +1951,7 @@ function handleSubstituteResult(event) {
 
 async function confirmPickingProductDialog() {
   const sku = state.selectedPickingProduct;
-  const quantity = number(document.getElementById("substitute-quantity").value);
+  const quantity = quantityNumber(document.getElementById("substitute-quantity").value);
   if (!sku || quantity <= 0) return alert("יש לבחור מוצר וכמות.");
   if (state.pickingProductMode === "substitute") {
     state.db.run(`
@@ -3178,6 +3178,13 @@ function number(value) {
   const cleaned = String(value ?? "").replace(/[,\s₪]/g, "");
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function quantityNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
+  const cleaned = String(value ?? "").trim().replace(/\s/g, "").replace(",", ".");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
 }
 
 function text(value) {
