@@ -257,6 +257,7 @@ function createManagementSchema() {
       status TEXT,
       call_again_time TEXT,
       whatsapp_sent_at TEXT,
+      manual_order_id INTEGER,
       notes TEXT,
       updated_at TEXT NOT NULL
     );
@@ -316,6 +317,7 @@ function createManagementSchema() {
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
   ensureColumn("customer_calls", "whatsapp_sent_at", "TEXT");
+  ensureColumn("customer_calls", "manual_order_id", "INTEGER");
   ensureColumn("customer_call_profiles", "address", "TEXT");
   ensureColumn("customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
   ensureColumn("customer_orders", "notes", "TEXT");
@@ -1598,6 +1600,25 @@ function renderPicking() {
 function normalizeClosedOrderStatuses() {
   state.db.run("UPDATE customer_orders SET status = 'נשלחה' WHERE COALESCE(shipped_at, '') <> '' AND status <> 'נשלחה'");
   state.db.run("UPDATE customer_orders SET status = 'picked' WHERE COALESCE(picked_at, '') <> '' AND COALESCE(shipped_at, '') = '' AND status = 'מוכן לאיסוף'");
+  state.db.run(`
+    UPDATE customer_orders
+    SET status = 'picked',
+        picked_by = COALESCE(picked_by, 'מלקט'),
+        picked_at = COALESCE(picked_at, ?),
+        updated_at = ?
+    WHERE status = 'מוכן לאיסוף'
+      AND EXISTS (
+        SELECT 1 FROM customer_order_items i
+        WHERE i.order_id = customer_orders.id
+          AND COALESCE(i.item_status, 'pending') <> 'return'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM customer_order_items i
+        WHERE i.order_id = customer_orders.id
+          AND COALESCE(i.item_status, 'pending') = 'pending'
+          AND COALESCE(i.item_status, 'pending') <> 'return'
+      )
+  `, [new Date().toISOString(), new Date().toISOString()]);
 }
 
 function refreshPickingProductControls() {
@@ -1969,6 +1990,7 @@ async function manualCompletePickingOrder(orderId) {
 }
 
 function renderOrderHistory() {
+  normalizeClosedOrderStatuses();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
@@ -2417,7 +2439,7 @@ async function markInvoicePrinted(orderId) {
 
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
-  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, now, orderId]);
+  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
   await persistDatabase();
   renderOrderHistory();
 }
@@ -2464,12 +2486,12 @@ function nearestCallDayForOrder(customerNo, orderDateValue) {
 function upsertCallStatus(customerNo, customerName, day, status, options = {}) {
   const callDate = callDateForDay(day, options.referenceDate ? new Date(options.referenceDate) : new Date());
   const now = new Date().toISOString();
-  const existing = firstRow("SELECT whatsapp_sent_at FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
+  const existing = firstRow("SELECT whatsapp_sent_at, manual_order_id FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   state.db.run("DELETE FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   state.db.run(`
-    INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, notes, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [callDate, customerNo, customerName, status, options.callAgainTime || null, options.whatsappSentAt ?? existing.whatsapp_sent_at ?? null, options.notes || "", now]);
+    INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, manual_order_id, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [callDate, customerNo, customerName, status, options.callAgainTime || null, options.whatsappSentAt ?? existing.whatsapp_sent_at ?? null, options.manualOrderId ?? existing.manual_order_id ?? null, options.notes || "", now]);
 }
 
 function markCustomerOrderedCall(customerNo, customerName, orderDateValue) {
@@ -2487,13 +2509,13 @@ function createManualOrderFromCall(customerNo, customerName) {
       AND order_date = ?
       AND status IN ('מוכן לאיסוף', 'picked', 'מוכן למשלוח')
   `, [customerNo, orderDate]);
-  if (number(exists) > 0) return false;
+  if (number(exists) > 0) return 0;
   const now = new Date().toISOString();
   state.db.run(`
     INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at)
     VALUES (?, ?, ?, ?, ?, 0, 0, ?)
   `, [orderDate, customerNo, customerName, ORDER_STATUSES[0], "הזמנה ידנית מניהול שיחות", now]);
-  return true;
+  return number(scalar("SELECT last_insert_rowid()"));
 }
 
 async function saveCall(event) {
@@ -2906,6 +2928,8 @@ async function updateCustomerCallFromButton(button) {
   const status = button.dataset.callStatus;
   const row = callCustomerByNo(customerNo);
   if (!row.customer_no) return;
+  const callDate = callDateForDay(state.callsDay);
+  const existingCall = firstRow("SELECT status, manual_order_id FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   const options = {};
   if (status === "call_again") {
     const timeInput = document.getElementById(`call-time-${customerNo}`);
@@ -2918,8 +2942,13 @@ async function updateCustomerCallFromButton(button) {
     options.callAgainTime = timeInput.value;
   }
   if (status === "no_answer") options.notes = `לא ענה ${new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`;
+  if (status === "ordered" && normalizeCallStatus(existingCall.status) !== "ordered" && !number(existingCall.manual_order_id)) {
+    const orderId = createManualOrderFromCall(row.customer_no, row.customer_name);
+    if (orderId) options.manualOrderId = orderId;
+  } else if (number(existingCall.manual_order_id)) {
+    options.manualOrderId = number(existingCall.manual_order_id);
+  }
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, options);
-  if (status === "ordered") createManualOrderFromCall(row.customer_no, row.customer_name);
   await persistDatabase();
   renderCalls();
   renderOrderHistory();
