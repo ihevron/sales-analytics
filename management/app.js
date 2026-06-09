@@ -1554,8 +1554,11 @@ function comparePriorityExportItems(a, b) {
     const aIs999 = String(a.export_sku || a.sku).trim() === "999";
     const bIs999 = String(b.export_sku || b.sku).trim() === "999";
     if (aIs999 !== bIs999) return aIs999 ? -1 : 1;
+    return number(a.export_sequence ?? a.entry_sequence ?? a.action_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? b.action_sequence ?? 0);
   }
-  return number(a.export_sequence ?? a.entry_sequence ?? a.action_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? b.action_sequence ?? 0);
+  const pickOrderDiff = number(a.export_pick_order ?? 999999) - number(b.export_pick_order ?? 999999);
+  if (pickOrderDiff !== 0) return pickOrderDiff;
+  return number(a.action_sequence ?? a.export_sequence ?? a.entry_sequence ?? 0) - number(b.action_sequence ?? b.export_sequence ?? b.entry_sequence ?? 0);
 }
 
 function renderPicking() {
@@ -2460,15 +2463,20 @@ function exportSavedOrder(orderId) {
       i.units_per_carton,
       CASE WHEN i.item_status = 'return' THEN -ABS(COALESCE(i.quantity, 0)) ELSE i.picked_quantity END AS export_quantity,
       CASE WHEN i.item_status = 'return' THEN 1 ELSE 0 END AS export_sort_group,
+      CASE
+        WHEN i.item_status = 'substituted' THEN COALESCE(sp.pick_order, 999999)
+        ELSE COALESCE(p.pick_order, 999999)
+      END AS export_pick_order,
       COALESCE(i.entry_sequence, i.id) AS export_sequence
     FROM customer_order_items i
+    LEFT JOIN products p ON p.sku = i.sku
     LEFT JOIN products sp ON sp.sku = i.substitute_product_id
     WHERE i.order_id = ?
       AND (
         (COALESCE(i.item_status, 'pending') IN ('picked', 'substituted') AND COALESCE(i.picked_quantity, 0) > 0)
         OR COALESCE(i.item_status, 'pending') = 'return'
       )
-    ORDER BY export_sort_group, COALESCE(i.action_sequence, i.id), export_sequence
+    ORDER BY export_sort_group, export_pick_order, COALESCE(i.action_sequence, i.id), export_sequence
   `, [orderId]);
   exportPriorityRows(order, items);
 }
