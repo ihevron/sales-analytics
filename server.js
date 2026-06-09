@@ -327,10 +327,13 @@ function handleStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url === "/healthz") {
+  const requestPath = (req.url || "/").split("?")[0];
+
+  if (requestPath === "/healthz") {
     sendJson(res, 200, {
       ok: true,
       storage: useSupabase ? "supabase" : "disk",
+      pickingChangesApi: true,
       supabase: {
         configured: useSupabase,
         host: supabaseUrl ? new URL(supabaseUrl).host : "",
@@ -341,7 +344,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === "/api/db" && req.method === "GET") {
+  if (requestPath === "/api/db" && req.method === "GET") {
     handleDatabaseGet(res).catch((error) => {
       console.error(error);
       send(res, 500, "database read failed");
@@ -349,12 +352,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === "/api/db" && req.method === "POST") {
+  if (requestPath === "/api/db" && req.method === "POST") {
     handleDatabasePost(req, res);
     return;
   }
 
-  if (req.url === "/api/picking-changes" && req.method === "POST") {
+  if (requestPath === "/api/picking-changes" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => handlePickingChanges(payload, res));
     return;
   }
