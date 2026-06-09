@@ -458,6 +458,11 @@ function bindEvents() {
   document.getElementById("order-customer-results").addEventListener("mousedown", handleOrderCustomerResult);
   document.getElementById("order-product-results").addEventListener("mousedown", handleOrderProductResult);
   document.getElementById("product-modal-confirm").addEventListener("click", confirmProductDialog);
+  document.getElementById("modal-product-quantity").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    confirmProductDialog();
+  });
   document.getElementById("product-modal-cancel").addEventListener("click", closeProductDialog);
   document.getElementById("product-modal-close").addEventListener("click", closeProductDialog);
   document.getElementById("substitute-modal-cancel").addEventListener("click", closeSubstituteDialog);
