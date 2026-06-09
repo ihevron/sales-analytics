@@ -70,6 +70,7 @@ const state = {
   processTab: "pending",
   persistTimer: null,
   serverSaveInProgress: false,
+  pendingPickingChanges: [],
   callTemplates: loadCallTemplates(),
   selectedCallTemplateId: "weekly",
 };
@@ -1828,7 +1829,9 @@ function bindPickingActions() {
   document.querySelectorAll("[data-pick-qty]").forEach((input) => {
     input.addEventListener("focus", () => input.select());
     input.addEventListener("change", () => {
-      state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [quantityNumber(input.value), input.dataset.pickQty]);
+      const pickedQuantity = quantityNumber(input.value);
+      state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [pickedQuantity, input.dataset.pickQty]);
+      queuePickingChange({ type: "itemQuantity", itemId: input.dataset.pickQty, pickedQuantity });
       savePickingNow({ silent: true });
     });
   });
@@ -1855,6 +1858,13 @@ async function markPickingItem(itemId, status, skipCartonDialog = false) {
     SET item_status = ?, picked_quantity = ?, action_sequence = ?
     WHERE id = ?
   `, [itemStatus, pickedQuantity, nextActionSequence(), itemId]);
+  queuePickingChange({
+    type: "itemStatus",
+    itemId,
+    itemStatus,
+    pickedQuantity,
+    actionSequence: nextActionSequence() - 1,
+  });
   renderPicking();
   await savePickingNow({ silent: true });
 }
@@ -1880,6 +1890,7 @@ async function confirmCartonPicking() {
   const row = firstRow("SELECT sku FROM customer_order_items WHERE id = ?", [itemId]);
   state.db.run("UPDATE customer_order_items SET units_per_carton = ? WHERE id = ?", [units, itemId]);
   if (row.sku) state.db.run("UPDATE products SET units_per_carton = ?, updated_at = ? WHERE sku = ?", [units, new Date().toISOString(), row.sku]);
+  queuePickingChange({ type: "productUnits", itemId, sku: row.sku || "", unitsPerCarton: units });
   closeCartonDialog();
   await markPickingItem(itemId, "picked", true);
 }
@@ -1892,6 +1903,7 @@ async function pickAllPendingItems(orderId) {
     const status = row.substitute_product_id ? "substituted" : "picked";
     const pickedQuantity = number(row.picked_quantity) || number(row.quantity);
     state.db.run("UPDATE customer_order_items SET item_status = ?, picked_quantity = ?, action_sequence = ? WHERE id = ?", [status, pickedQuantity, sequenceStart + index, row.id]);
+    queuePickingChange({ type: "itemStatus", itemId: row.id, itemStatus: status, pickedQuantity, actionSequence: sequenceStart + index });
   });
   state.db.run("COMMIT");
   renderPicking();
@@ -1992,16 +2004,20 @@ function openAddPickingProductDialog(orderId) {
 
 function editPickedItem(itemId) {
   const row = firstRow("SELECT quantity, picked_quantity FROM customer_order_items WHERE id = ?", [itemId]);
-  state.db.run("UPDATE customer_order_items SET item_status = 'pending', picked_quantity = ? WHERE id = ?", [number(row.picked_quantity) || number(row.quantity), itemId]);
+  const pickedQuantity = number(row.picked_quantity) || number(row.quantity);
+  state.db.run("UPDATE customer_order_items SET item_status = 'pending', picked_quantity = ? WHERE id = ?", [pickedQuantity, itemId]);
+  queuePickingChange({ type: "itemPending", itemId, pickedQuantity });
   renderPicking();
-  schedulePersistDatabase();
+  savePickingNow({ silent: true });
 }
 
 async function completePickingOrder(orderId) {
   const pending = scalar("SELECT COUNT(*) FROM customer_order_items WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'", [orderId]);
   if (number(pending) > 0) return;
-  state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["מלקט", new Date().toISOString(), new Date().toISOString(), orderId]);
-  await persistDatabase();
+  const now = new Date().toISOString();
+  state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["מלקט", now, now, orderId]);
+  queuePickingChange({ type: "completeOrder", orderId, pickedBy: "מלקט", pickedAt: now, updatedAt: now });
+  await savePickingNow();
   renderPicking();
   renderOrderHistory();
 }
@@ -3371,24 +3387,36 @@ function schedulePersistDatabase(delay = 900) {
 async function savePickingNow(options = {}) {
   if (!state.db) return null;
   if (state.serverSaveInProgress) {
-    schedulePersistDatabase(300);
+    setTimeout(() => savePickingNow({ silent: true }), 350);
     return null;
   }
   state.serverSaveInProgress = true;
   setPickingSyncStatus("שומר לשרת...");
-  const result = await persistDatabase();
+  await writeBrowserDatabase(state.db.export());
+  const changesToSend = state.pendingPickingChanges.slice();
+  const result = changesToSend.length
+    ? await writePickingChanges(changesToSend)
+    : { ok: true, skipped: true };
+  if (result.ok && changesToSend.length) state.pendingPickingChanges.splice(0, changesToSend.length);
+  updateServerSaveStatus(result);
   state.serverSaveInProgress = false;
-  if (!result.server.ok && !options.silent) alert("השמירה לשרת נכשלה. הנתונים נשמרו בדפדפן הזה בלבד.");
-  return result;
+  if (result.ok && state.pendingPickingChanges.length) setTimeout(() => savePickingNow({ silent: true }), 50);
+  if (!result.ok && !options.silent) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}. הנתונים נשמרו בדפדפן הזה בלבד.`);
+  return { server: result };
+}
+
+function queuePickingChange(change) {
+  state.pendingPickingChanges.push(change);
+  setPickingSyncStatus("יש שינויי ליקוט שעדיין לא נשמרו לשרת");
 }
 
 function updateServerSaveStatus(server) {
   if (server?.ok) {
     const time = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setPickingSyncStatus(`נשמר לשרת ${time}`);
+    setPickingSyncStatus(server.skipped ? `אין שינויי ליקוט לשמירה ${time}` : `נשמר לשרת ${time}`);
     return;
   }
-  setPickingSyncStatus("נשמר בדפדפן בלבד - לא סונכרן לשרת");
+  setPickingSyncStatus(`נשמר בדפדפן בלבד - לא סונכרן לשרת${server?.error ? ` (${server.error})` : ""}`);
 }
 
 function setPickingSyncStatus(textValue) {
@@ -3417,6 +3445,25 @@ async function writeServerDatabase(data) {
     return { ok: false, error: await response.text() };
   } catch (error) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
+    return { ok: false, error: error.message };
+  }
+}
+
+async function writePickingChanges(changes) {
+  try {
+    const response = await fetch("/api/picking-changes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes }),
+    });
+    if (response.ok) {
+      const result = await response.json().catch(() => ({}));
+      return { ok: result.ok !== false, applied: result.applied || changes.length };
+    }
+    const textValue = await response.text();
+    return { ok: false, error: `${response.status} ${textValue}`.trim() };
+  } catch (error) {
+    console.warn("לא ניתן לשמור שינויי ליקוט בשרת", error);
     return { ok: false, error: error.message };
   }
 }
