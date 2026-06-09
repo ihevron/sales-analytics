@@ -1,7 +1,6 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const initSqlJs = require("sql.js");
 
 const root = __dirname;
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, "data"));
@@ -104,6 +103,7 @@ async function writeDatabaseToSupabase(body) {
 
 function initServerSql() {
   if (!SQLRuntimePromise) {
+    const initSqlJs = require("sql.js");
     SQLRuntimePromise = initSqlJs({
       locateFile: (file) => path.join(root, "node_modules", "sql.js", "dist", file),
     });
