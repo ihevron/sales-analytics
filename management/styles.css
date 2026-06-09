@@ -515,6 +515,25 @@ textarea { resize: vertical; }
   min-width: min(280px, 100%);
 }
 
+.picking-sync-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.picking-sync-actions .primary-action {
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.picking-sync-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .pick-category-cold td {
   background: #fff7bf;
 }
@@ -1342,6 +1361,16 @@ ul {
   .metrics-grid, .inline-form { grid-template-columns: 1fr; }
   .toolbar, .search-row, .product-toolbar, .form-actions { flex-direction: column; align-items: stretch; }
   .picking-mode-bar, .product-picking-controls { flex-direction: column; align-items: stretch; }
+  .picking-sync-actions {
+    justify-content: space-between;
+  }
+  .picking-sync-actions .primary-action {
+    flex: 0 0 auto;
+  }
+  .picking-sync-status {
+    flex: 1;
+    text-align: left;
+  }
   .segmented { width: 100%; }
   .segmented button { flex: 1; }
   .modal {

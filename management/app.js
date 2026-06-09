@@ -69,6 +69,7 @@ const state = {
   selectedCallCustomers: new Set(),
   processTab: "pending",
   persistTimer: null,
+  serverSaveInProgress: false,
   callTemplates: loadCallTemplates(),
   selectedCallTemplateId: "weekly",
 };
@@ -486,6 +487,7 @@ function bindEvents() {
     state.selectedPickingProductSku = "";
     renderPickingByProduct();
   });
+  document.getElementById("picking-save").addEventListener("click", () => savePickingNow());
   document.getElementById("order-save").addEventListener("click", saveOrder);
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
@@ -1827,7 +1829,7 @@ function bindPickingActions() {
     input.addEventListener("focus", () => input.select());
     input.addEventListener("change", () => {
       state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [quantityNumber(input.value), input.dataset.pickQty]);
-      schedulePersistDatabase();
+      savePickingNow({ silent: true });
     });
   });
   document.querySelectorAll("[data-pick-ok]").forEach((button) => button.addEventListener("click", () => markPickingItem(button.dataset.pickOk, "picked")));
@@ -1854,7 +1856,7 @@ async function markPickingItem(itemId, status, skipCartonDialog = false) {
     WHERE id = ?
   `, [itemStatus, pickedQuantity, nextActionSequence(), itemId]);
   renderPicking();
-  schedulePersistDatabase();
+  await savePickingNow({ silent: true });
 }
 
 function openCartonDialog(itemId, unitsPerCarton) {
@@ -1893,7 +1895,7 @@ async function pickAllPendingItems(orderId) {
   });
   state.db.run("COMMIT");
   renderPicking();
-  schedulePersistDatabase();
+  await savePickingNow({ silent: true });
 }
 
 function nextActionSequence() {
@@ -3351,17 +3353,47 @@ async function persistDatabase() {
   }
   const data = state.db.export();
   const [, server] = await Promise.all([writeBrowserDatabase(data), writeServerDatabase(data)]);
+  updateServerSaveStatus(server);
   return { server };
 }
 
 function schedulePersistDatabase(delay = 900) {
   const data = state.db.export();
   writeBrowserDatabase(data);
+  setPickingSyncStatus("שמירה מקומית בוצעה, ממתין לשרת");
   if (state.persistTimer) clearTimeout(state.persistTimer);
   state.persistTimer = setTimeout(() => {
     state.persistTimer = null;
-    writeServerDatabase(data);
+    writeServerDatabase(data).then(updateServerSaveStatus);
   }, delay);
+}
+
+async function savePickingNow(options = {}) {
+  if (!state.db) return null;
+  if (state.serverSaveInProgress) {
+    schedulePersistDatabase(300);
+    return null;
+  }
+  state.serverSaveInProgress = true;
+  setPickingSyncStatus("שומר לשרת...");
+  const result = await persistDatabase();
+  state.serverSaveInProgress = false;
+  if (!result.server.ok && !options.silent) alert("השמירה לשרת נכשלה. הנתונים נשמרו בדפדפן הזה בלבד.");
+  return result;
+}
+
+function updateServerSaveStatus(server) {
+  if (server?.ok) {
+    const time = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setPickingSyncStatus(`נשמר לשרת ${time}`);
+    return;
+  }
+  setPickingSyncStatus("נשמר בדפדפן בלבד - לא סונכרן לשרת");
+}
+
+function setPickingSyncStatus(textValue) {
+  const element = document.getElementById("picking-sync-status");
+  if (element) element.textContent = textValue;
 }
 
 function writeBrowserDatabase(data) {

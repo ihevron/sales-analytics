@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260609j" />
+    <link rel="stylesheet" href="./styles.css?v=20260609k" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260609j"></script>
+    <script defer src="./app.js?v=20260609k"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -183,6 +183,10 @@
               <div class="segmented">
                 <button class="active" data-picking-mode="orders">לפי הזמנה</button>
                 <button data-picking-mode="product">לפי מוצר</button>
+              </div>
+              <div class="picking-sync-actions">
+                <button id="picking-save" class="primary-action" type="button">שמירה לשרת</button>
+                <span id="picking-sync-status" class="picking-sync-status">לא בוצעה שמירה בסשן הנוכחי</span>
               </div>
               <div id="product-picking-controls" class="product-picking-controls hidden">
                 <select id="picking-product-select">
