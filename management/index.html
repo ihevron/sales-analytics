@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260608d" />
+    <link rel="stylesheet" href="./styles.css?v=20260609a" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260608f"></script>
+    <script defer src="./app.js?v=20260609a"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -202,12 +202,20 @@
             <div class="toolbar">
               <input id="history-query" type="search" placeholder="חיפוש לפי לקוח או מספר הזמנה" />
             </div>
-            <div class="panel-header"><h2>ממתינות לליקוט</h2></div>
-            <div class="table-wrap"><table id="process-pending-table"></table></div>
-            <div class="panel-header"><h2>הזמנות שלוקטו</h2></div>
-            <div class="table-wrap"><table id="history-table"></table></div>
-            <div class="panel-header process-subtitle"><h2>מוכן למשלוח</h2></div>
-            <div class="table-wrap"><table id="shipping-table"></table></div>
+            <div class="process-tabs" id="process-tabs">
+              <button class="active" data-process-tab="pending">ממתינות לליקוט</button>
+              <button data-process-tab="picked">הזמנות שלוקטו</button>
+              <button data-process-tab="shipping">מוכן למשלוח</button>
+            </div>
+            <div class="process-pane active" data-process-pane="pending">
+              <div class="table-wrap"><table id="process-pending-table"></table></div>
+            </div>
+            <div class="process-pane" data-process-pane="picked">
+              <div class="table-wrap"><table id="history-table"></table></div>
+            </div>
+            <div class="process-pane" data-process-pane="shipping">
+              <div class="table-wrap"><table id="shipping-table"></table></div>
+            </div>
             <div id="process-order-detail" class="order-detail-panel hidden"></div>
             <div class="panel-header process-subtitle"><h2>הזמנות שהוחמצו</h2></div>
             <div id="missed-orders-list" class="missed-orders-list"></div>
@@ -253,6 +261,7 @@
               </div>
               <div class="calls-day-tabs" id="calls-day-tabs"></div>
               <div class="calls-summary" id="calls-summary"></div>
+              <div class="call-bulk-actions hidden" id="call-bulk-actions"></div>
               <div class="table-wrap"><table id="calls-table"></table></div>
             </div>
           </div>

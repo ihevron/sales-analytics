@@ -3,6 +3,7 @@ const SQL_WASM = "https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/";
 const ORDER_STATUSES = ["מוכן לאיסוף", "נאסף", "מוכן למשלוח"];
 const CALL_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי"];
 const CALL_DAY_INDEX = { "ראשון": 0, "שני": 1, "שלישי": 2, "רביעי": 3, "חמישי": 4 };
+const CALL_DAY_SHORT = { "ראשון": "א׳", "שני": "ב׳", "שלישי": "ג׳", "רביעי": "ד׳", "חמישי": "ה׳" };
 const CALL_DAY_ALIASES = {
   "א": "ראשון",
   "א׳": "ראשון",
@@ -65,6 +66,9 @@ const state = {
   callsDay: "ראשון",
   callsFilter: "",
   expandedCallCustomerNo: "",
+  selectedCallCustomers: new Set(),
+  processTab: "pending",
+  persistTimer: null,
   callTemplates: loadCallTemplates(),
   selectedCallTemplateId: "weekly",
 };
@@ -252,6 +256,7 @@ function createManagementSchema() {
       customer_name TEXT,
       status TEXT,
       call_again_time TEXT,
+      whatsapp_sent_at TEXT,
       notes TEXT,
       updated_at TEXT NOT NULL
     );
@@ -309,6 +314,7 @@ function createManagementSchema() {
   ensureColumn("products", "pick_order", "REAL DEFAULT 999999");
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
+  ensureColumn("customer_calls", "whatsapp_sent_at", "TEXT");
   ensureColumn("customer_call_profiles", "address", "TEXT");
   ensureColumn("customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
   ensureColumn("customer_orders", "notes", "TEXT");
@@ -474,10 +480,15 @@ function bindEvents() {
   document.getElementById("order-save").addEventListener("click", saveOrder);
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
+  document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.processTab = button.dataset.processTab;
+    renderOrderHistory();
+  }));
   document.getElementById("call-form").addEventListener("submit", saveCall);
   document.getElementById("call-reset").addEventListener("click", resetCallForm);
   document.getElementById("call-customer-query").addEventListener("input", debounce(refreshCallCustomerSelect, 200));
   document.addEventListener("click", closeAutocompleteOnOutsideClick);
+  bindPullToRefresh();
 }
 
 async function refreshAll() {
@@ -761,7 +772,7 @@ function dayFromText(value) {
 
 function pickOrderValue(row, mapped) {
   const mappedValue = number(mapped.pick_order);
-  if (mappedValue) return mappedValue;
+  if (text(mapped.pick_order) !== "") return mappedValue;
   const values = Object.values(row);
   return number(values[12]) || 999999;
 }
@@ -1163,6 +1174,25 @@ function closeAutocompleteOnOutsideClick(event) {
     document.getElementById("order-customer-results").classList.add("hidden");
     document.getElementById("order-product-results").classList.add("hidden");
   }
+}
+
+function bindPullToRefresh() {
+  let startY = 0;
+  let tracking = false;
+  document.addEventListener("touchstart", (event) => {
+    if (window.scrollY > 2) return;
+    startY = event.touches[0]?.clientY || 0;
+    tracking = true;
+  }, { passive: true });
+  document.addEventListener("touchend", async (event) => {
+    if (!tracking) return;
+    tracking = false;
+    const endY = event.changedTouches[0]?.clientY || 0;
+    if (endY - startY < 90 || window.scrollY > 2) return;
+    setStatus("מרענן נתונים");
+    if (state.persistTimer) await persistDatabase();
+    window.location.reload();
+  }, { passive: true });
 }
 
 function handleOrderCustomerResult(event) {
@@ -1733,9 +1763,9 @@ function pickingOrderItemsHtml(orderId) {
 function bindPickingActions() {
   document.querySelectorAll("[data-pick-qty]").forEach((input) => {
     input.addEventListener("focus", () => input.select());
-    input.addEventListener("change", async () => {
+    input.addEventListener("change", () => {
       state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [number(input.value), input.dataset.pickQty]);
-      await persistDatabase();
+      schedulePersistDatabase();
     });
   });
   document.querySelectorAll("[data-pick-ok]").forEach((button) => button.addEventListener("click", () => markPickingItem(button.dataset.pickOk, "picked")));
@@ -1761,8 +1791,8 @@ async function markPickingItem(itemId, status, skipCartonDialog = false) {
     SET item_status = ?, picked_quantity = ?, action_sequence = ?
     WHERE id = ?
   `, [itemStatus, pickedQuantity, nextActionSequence(), itemId]);
-  await persistDatabase();
   renderPicking();
+  schedulePersistDatabase();
 }
 
 function openCartonDialog(itemId, unitsPerCarton) {
@@ -1786,7 +1816,6 @@ async function confirmCartonPicking() {
   const row = firstRow("SELECT sku FROM customer_order_items WHERE id = ?", [itemId]);
   state.db.run("UPDATE customer_order_items SET units_per_carton = ? WHERE id = ?", [units, itemId]);
   if (row.sku) state.db.run("UPDATE products SET units_per_carton = ?, updated_at = ? WHERE sku = ?", [units, new Date().toISOString(), row.sku]);
-  await persistDatabase();
   closeCartonDialog();
   await markPickingItem(itemId, "picked", true);
 }
@@ -1801,8 +1830,8 @@ async function pickAllPendingItems(orderId) {
     state.db.run("UPDATE customer_order_items SET item_status = ?, picked_quantity = ?, action_sequence = ? WHERE id = ?", [status, pickedQuantity, sequenceStart + index, row.id]);
   });
   state.db.run("COMMIT");
-  await persistDatabase();
   renderPicking();
+  schedulePersistDatabase();
 }
 
 function nextActionSequence() {
@@ -1900,7 +1929,8 @@ function openAddPickingProductDialog(orderId) {
 function editPickedItem(itemId) {
   const row = firstRow("SELECT quantity, picked_quantity FROM customer_order_items WHERE id = ?", [itemId]);
   state.db.run("UPDATE customer_order_items SET item_status = 'pending', picked_quantity = ? WHERE id = ?", [number(row.picked_quantity) || number(row.quantity), itemId]);
-  persistDatabase().then(() => renderPicking());
+  renderPicking();
+  schedulePersistDatabase();
 }
 
 async function completePickingOrder(orderId) {
@@ -1912,8 +1942,21 @@ async function completePickingOrder(orderId) {
   renderOrderHistory();
 }
 
+async function manualCompletePickingOrder(orderId) {
+  const now = new Date().toISOString();
+  state.db.run("UPDATE customer_order_items SET item_status = 'picked', picked_quantity = CASE WHEN COALESCE(picked_quantity, 0) > 0 THEN picked_quantity ELSE quantity END, action_sequence = COALESCE(action_sequence, ?) WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'", [nextActionSequence(), orderId]);
+  state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["ליקוט ידני", now, now, orderId]);
+  await persistDatabase();
+  state.processTab = "picked";
+  renderPicking();
+  renderOrderHistory();
+}
+
 function renderOrderHistory() {
+  syncManualOrdersFromOrderedCalls();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
+  document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
+  document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
   const pendingRows = queryRows(`
     SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit
     FROM customer_orders
@@ -1931,6 +1974,7 @@ function renderOrderHistory() {
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
       <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
       <button class="small-action" data-open-picking-order="${row.id}">פתח בליקוט</button>
+      <button class="small-action" data-manual-complete-picking="${row.id}">אשר ליקוט</button>
     ` },
   ], "processPending", "id", "desc");
 
@@ -1980,6 +2024,7 @@ function renderOrderHistory() {
     state.expandedPickingOrderId = Number(button.dataset.openPickingOrder);
     showScreen("picking");
   }));
+  document.querySelectorAll("[data-manual-complete-picking]").forEach((button) => button.addEventListener("click", () => manualCompletePickingOrder(button.dataset.manualCompletePicking)));
   document.querySelectorAll("[data-view-process-order]").forEach((button) => button.addEventListener("click", () => viewProcessOrder(button.dataset.viewProcessOrder, button)));
   document.querySelectorAll("[data-mark-shipped]").forEach((button) => button.addEventListener("click", () => markOrderShipped(button.dataset.markShipped)));
   renderMissedOrders(query);
@@ -2393,17 +2438,50 @@ function nearestCallDayForOrder(customerNo, orderDateValue) {
 function upsertCallStatus(customerNo, customerName, day, status, options = {}) {
   const callDate = callDateForDay(day, options.referenceDate ? new Date(options.referenceDate) : new Date());
   const now = new Date().toISOString();
+  const existing = firstRow("SELECT whatsapp_sent_at FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   state.db.run("DELETE FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   state.db.run(`
-    INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, notes, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [callDate, customerNo, customerName, status, options.callAgainTime || null, options.notes || "", now]);
+    INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [callDate, customerNo, customerName, status, options.callAgainTime || null, options.whatsappSentAt ?? existing.whatsapp_sent_at ?? null, options.notes || "", now]);
 }
 
 function markCustomerOrderedCall(customerNo, customerName, orderDateValue) {
   if (!customerNo) return;
   const day = nearestCallDayForOrder(customerNo, orderDateValue);
   upsertCallStatus(customerNo, customerName, day, "ordered", { referenceDate: orderDateValue, notes: "סומן אוטומטית לאחר שידור הזמנה" });
+}
+
+function createManualOrderFromCall(customerNo, customerName) {
+  const orderDate = toSqlDate(new Date());
+  const exists = scalar(`
+    SELECT COUNT(*)
+    FROM customer_orders
+    WHERE customer_no = ?
+      AND order_date = ?
+      AND status IN ('מוכן לאיסוף', 'picked', 'מוכן למשלוח')
+  `, [customerNo, orderDate]);
+  if (number(exists) > 0) return false;
+  const now = new Date().toISOString();
+  state.db.run(`
+    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at)
+    VALUES (?, ?, ?, ?, ?, 0, 0, ?)
+  `, [orderDate, customerNo, customerName, ORDER_STATUSES[0], "הזמנה ידנית מניהול שיחות", now]);
+  return true;
+}
+
+function syncManualOrdersFromOrderedCalls() {
+  let created = 0;
+  const rows = queryRows(`
+    SELECT c.customer_no, MAX(c.customer_name) AS customer_name
+    FROM customer_calls c
+    WHERE c.status = 'ordered'
+    GROUP BY c.customer_no
+  `);
+  rows.forEach((row) => {
+    if (createManualOrderFromCall(row.customer_no, row.customer_name)) created += 1;
+  });
+  if (created) schedulePersistDatabase();
 }
 
 async function saveCall(event) {
@@ -2449,6 +2527,7 @@ function renderCalls() {
       COALESCE(p.days, '') AS days,
       COALESCE(call.status, 'pending') AS status,
       COALESCE(call.call_again_time, '') AS call_again_time,
+      COALESCE(call.whatsapp_sent_at, '') AS whatsapp_sent_at,
       COALESCE(call.notes, '') AS notes,
       COALESCE(call.updated_at, '') AS updated_at
     FROM customer_call_profiles p
@@ -2471,11 +2550,17 @@ function renderCalls() {
   const visibleRows = state.callsFilter ? rows.filter((row) => normalizeCallStatus(row.status) === state.callsFilter) : rows;
   renderCallSummary(rows);
   const table = document.getElementById("calls-table");
-  const body = visibleRows.length ? visibleRows.map((row) => callRowHtml(row)).join("") : `<tr><td colspan="3" class="empty-state">אין לקוחות להצגה. יש לטעון לקוחות באקסל במסך ניהול שיחות.</td></tr>`;
+  const body = visibleRows.length ? visibleRows.map((row) => callRowHtml(row)).join("") : `<tr><td colspan="4" class="empty-state">אין לקוחות להצגה. יש לטעון לקוחות באקסל במסך ניהול שיחות.</td></tr>`;
   table.innerHTML = `
-    <thead><tr><th>לקוח</th><th>סטטוס</th><th>שעה</th></tr></thead>
+    <thead><tr><th class="call-select-col"></th><th>לקוח</th><th>סטטוס</th><th>שעה</th></tr></thead>
     <tbody>${body}</tbody>
   `;
+  renderCallBulkActions(visibleRows);
+  table.querySelectorAll("[data-call-select]").forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) state.selectedCallCustomers.add(input.dataset.callSelect);
+    else state.selectedCallCustomers.delete(input.dataset.callSelect);
+    renderCallBulkActions(visibleRows);
+  }));
   table.querySelectorAll("[data-call-toggle]").forEach((button) => button.addEventListener("click", () => {
     state.expandedCallCustomerNo = state.expandedCallCustomerNo === button.dataset.callToggle ? "" : button.dataset.callToggle;
     renderCalls();
@@ -2486,12 +2571,14 @@ function renderCalls() {
   table.querySelectorAll("[data-toggle-call-whatsapp]").forEach((button) => button.addEventListener("click", () => toggleCallWhatsappPanel(button.dataset.toggleCallWhatsapp)));
   table.querySelectorAll("[data-call-template]").forEach((select) => select.addEventListener("change", () => updateCallMessagePreview(select)));
   table.querySelectorAll("[data-call-message]").forEach((textarea) => textarea.addEventListener("input", () => updateCallWhatsappLink(textarea.dataset.callMessage)));
+  table.querySelectorAll("[data-call-whatsapp-send]").forEach((link) => link.addEventListener("click", () => markWhatsappSent(link.dataset.callWhatsappSend)));
   table.querySelectorAll("[data-save-call-note]").forEach((button) => button.addEventListener("click", () => saveExpandedCallNote(button.dataset.saveCallNote)));
+  table.querySelectorAll("[data-save-call-profile]").forEach((button) => button.addEventListener("click", () => saveCallProfile(button.dataset.saveCallProfile)));
 }
 
 function renderCallDayTabs() {
   document.getElementById("calls-day-tabs").innerHTML = CALL_DAYS.map((day) => `
-    <button class="${state.callsDay === day ? "active" : ""}" data-call-day="${day}">יום ${day}<small>${displayShortDate(callDateForDay(day))}</small></button>
+    <button class="${state.callsDay === day ? "active" : ""}" data-call-day="${day}">יום ${CALL_DAY_SHORT[day] || day}<small>${displayShortDate(callDateForDay(day))}</small></button>
   `).join("");
   document.querySelectorAll("[data-call-day]").forEach((button) => button.addEventListener("click", () => {
     state.callsDay = button.dataset.callDay;
@@ -2523,6 +2610,45 @@ function renderCallSummary(rows) {
     state.callsFilter = state.callsFilter === button.dataset.callFilter ? "" : button.dataset.callFilter;
     renderCalls();
   }));
+}
+
+function renderCallBulkActions(rows = []) {
+  const container = document.getElementById("call-bulk-actions");
+  if (!container) return;
+  const selectedRows = rows.filter((row) => state.selectedCallCustomers.has(String(row.customer_no)));
+  container.classList.toggle("hidden", selectedRows.length === 0);
+  if (!selectedRows.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = `
+    <span>${integer(selectedRows.length)} לקוחות נבחרו</span>
+    <select id="bulk-call-template">
+      ${state.callTemplates.map((template) => `<option value="${escapeAttr(template.id)}">${escapeHtml(template.title)}</option>`).join("")}
+    </select>
+    <button class="primary-action" id="bulk-whatsapp-send" type="button">פתיחת WhatsApp לנבחרים</button>
+    <button class="secondary-action" id="bulk-call-clear" type="button">ניקוי בחירה</button>
+  `;
+  document.getElementById("bulk-whatsapp-send").addEventListener("click", () => openBulkWhatsapp(selectedRows));
+  document.getElementById("bulk-call-clear").addEventListener("click", () => {
+    state.selectedCallCustomers.clear();
+    renderCalls();
+  });
+}
+
+async function openBulkWhatsapp(rows) {
+  const templateId = document.getElementById("bulk-call-template")?.value;
+  const template = state.callTemplates.find((item) => item.id === templateId) || state.callTemplates[0] || CALL_MESSAGE_TEMPLATES[0];
+  rows.forEach((row, index) => {
+    const phone = String(row.phone || row.phone2 || "").replace(/\D/g, "").replace(/^0/, "972");
+    if (!phone) return;
+    const url = whatsappUrl(phone, templateText(template.text, row));
+    setTimeout(() => window.open(url, "_blank", "noopener"), index * 180);
+    markWhatsappSent(row.customer_no, false);
+  });
+  await persistDatabase();
+  state.selectedCallCustomers.clear();
+  renderCalls();
 }
 
 function renderCallTemplateEditor() {
@@ -2587,13 +2713,16 @@ function callRowHtml(row) {
   const meta = CALL_STATUS_META[status] || CALL_STATUS_META.pending;
   const expanded = state.expandedCallCustomerNo === String(row.customer_no);
   const timeText = status === "call_again" ? row.call_again_time : (status === "no_answer" ? timeFromIso(row.updated_at) : "");
+  const selected = state.selectedCallCustomers.has(String(row.customer_no));
+  const whatsappBadge = row.whatsapp_sent_at ? `<span class="call-message-sent" title="נשלחה הודעת WhatsApp">✓</span>` : "";
   return `
     <tr class="call-row status-${meta.className}">
-      <td><button class="call-customer-button" data-call-toggle="${escapeAttr(row.customer_no)}"><span>${escapeHtml(row.customer_name)}</span><small>${escapeHtml(row.customer_no)}${row.city ? ` · ${escapeHtml(row.city)}` : ""}</small></button></td>
+      <td class="call-select-col"><input type="checkbox" data-call-select="${escapeAttr(row.customer_no)}" ${selected ? "checked" : ""} /></td>
+      <td><button class="call-customer-button" data-call-toggle="${escapeAttr(row.customer_no)}"><span>${escapeHtml(row.customer_name)} ${whatsappBadge}</span><small>${escapeHtml(row.customer_no)}${row.city ? ` · ${escapeHtml(row.city)}` : ""}</small></button></td>
       <td><span class="call-status-pill ${meta.className}">${meta.label}</span></td>
       <td>${escapeHtml(timeText)}</td>
     </tr>
-    ${expanded ? `<tr class="call-detail-row"><td colspan="3">${callDetailHtml(row)}</td></tr>` : ""}
+    ${expanded ? `<tr class="call-detail-row"><td colspan="4">${callDetailHtml(row)}</td></tr>` : ""}
   `;
 }
 
@@ -2647,7 +2776,13 @@ function callDetailHtml(row) {
           </select>
         </label>
         <textarea id="call-message-${escapeAttr(row.customer_no)}" data-call-message="${escapeAttr(row.customer_no)}" rows="2">${escapeHtml(messagePreview)}</textarea>
-        ${whatsappPhone ? `<a class="primary-action" id="call-whatsapp-${escapeAttr(row.customer_no)}" href="${whatsappUrl(whatsappPhone, messagePreview)}" target="_blank" rel="noopener">שליחת WhatsApp</a>` : ""}
+        ${whatsappPhone ? `<a class="primary-action" id="call-whatsapp-${escapeAttr(row.customer_no)}" data-call-whatsapp-send="${escapeAttr(row.customer_no)}" href="${whatsappUrl(whatsappPhone, messagePreview)}" target="_blank" rel="noopener">שליחת WhatsApp</a>` : ""}
+      </div>
+      <div class="call-profile-editor">
+        <label>טלפון<input id="call-edit-phone-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.phone || "")}" /></label>
+        <label>כתובת<input id="call-edit-address-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.address || "")}" /></label>
+        <label>ימי שיחה<input id="call-edit-days-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.days || "")}" placeholder="ראשון,שלישי" /></label>
+        <button class="secondary-action" data-save-call-profile="${escapeAttr(row.customer_no)}" type="button">שמירת לקוח</button>
       </div>
       <label class="call-note-editor">הערת שיחה
         <textarea id="call-note-${escapeAttr(row.customer_no)}" rows="3">${escapeHtml(row.notes || "")}</textarea>
@@ -2724,6 +2859,36 @@ function updateCallWhatsappLink(customerNo) {
   if (link && phone) link.href = whatsappUrl(phone, message);
 }
 
+async function markWhatsappSent(customerNo, shouldPersist = true) {
+  const row = callCustomerByNo(customerNo);
+  if (!row.customer_no) return;
+  const existing = firstRow("SELECT status, call_again_time, notes FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDateForDay(state.callsDay)]);
+  upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, normalizeCallStatus(existing.status), {
+    callAgainTime: existing.call_again_time,
+    notes: existing.notes || "",
+    whatsappSentAt: new Date().toISOString(),
+  });
+  if (shouldPersist) {
+    await persistDatabase();
+    renderCalls();
+  }
+}
+
+async function saveCallProfile(customerNo) {
+  const phone = text(document.getElementById(`call-edit-phone-${customerNo}`)?.value);
+  const address = text(document.getElementById(`call-edit-address-${customerNo}`)?.value);
+  const days = normalizeCallDays(document.getElementById(`call-edit-days-${customerNo}`)?.value || state.callsDay);
+  const profile = firstRow("SELECT * FROM customer_call_profiles WHERE customer_no = ? AND COALESCE(source, 'calls') = 'calls'", [customerNo]);
+  if (!profile.customer_no) return;
+  state.db.run(`
+    UPDATE customer_call_profiles
+    SET phone = ?, address = ?, days = ?, updated_at = ?
+    WHERE customer_no = ?
+  `, [phone, address, days.join(","), new Date().toISOString(), customerNo]);
+  await persistDatabase();
+  renderCalls();
+}
+
 async function updateCustomerCallFromButton(button) {
   const customerNo = button.dataset.callCustomer;
   const status = button.dataset.callStatus;
@@ -2742,8 +2907,10 @@ async function updateCustomerCallFromButton(button) {
   }
   if (status === "no_answer") options.notes = `לא ענה ${new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`;
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, options);
+  if (status === "ordered") createManualOrderFromCall(row.customer_no, row.customer_name);
   await persistDatabase();
   renderCalls();
+  renderOrderHistory();
   if (state.selectedCustomer) renderCustomerCalls(state.selectedCustomer.customer_no);
 }
 
@@ -3105,9 +3272,21 @@ function readBrowserDatabase() {
 }
 
 async function persistDatabase() {
+  if (state.persistTimer) {
+    clearTimeout(state.persistTimer);
+    state.persistTimer = null;
+  }
   const data = state.db.export();
   const [, server] = await Promise.all([writeBrowserDatabase(data), writeServerDatabase(data)]);
   return { server };
+}
+
+function schedulePersistDatabase(delay = 900) {
+  if (state.persistTimer) clearTimeout(state.persistTimer);
+  state.persistTimer = setTimeout(() => {
+    state.persistTimer = null;
+    persistDatabase();
+  }, delay);
 }
 
 function writeBrowserDatabase(data) {
