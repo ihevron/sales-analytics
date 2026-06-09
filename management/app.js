@@ -1953,7 +1953,6 @@ async function manualCompletePickingOrder(orderId) {
 }
 
 function renderOrderHistory() {
-  syncManualOrdersFromOrderedCalls();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
@@ -2468,20 +2467,6 @@ function createManualOrderFromCall(customerNo, customerName) {
     VALUES (?, ?, ?, ?, ?, 0, 0, ?)
   `, [orderDate, customerNo, customerName, ORDER_STATUSES[0], "הזמנה ידנית מניהול שיחות", now]);
   return true;
-}
-
-function syncManualOrdersFromOrderedCalls() {
-  let created = 0;
-  const rows = queryRows(`
-    SELECT c.customer_no, MAX(c.customer_name) AS customer_name
-    FROM customer_calls c
-    WHERE c.status = 'ordered'
-    GROUP BY c.customer_no
-  `);
-  rows.forEach((row) => {
-    if (createManualOrderFromCall(row.customer_no, row.customer_name)) created += 1;
-  });
-  if (created) schedulePersistDatabase();
 }
 
 async function saveCall(event) {
