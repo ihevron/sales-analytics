@@ -102,6 +102,7 @@ button { cursor: pointer; }
 
 .content {
   min-width: 0;
+  max-width: 100vw;
   padding: 28px;
 }
 
@@ -330,6 +331,7 @@ tbody tr:hover { background: #fbfcff; }
 
 input, select, textarea {
   width: 100%;
+  max-width: 100%;
   min-height: 40px;
   padding: 9px 11px;
   color: var(--ink);
@@ -386,6 +388,10 @@ textarea { resize: vertical; }
 
 .product-toolbar input { flex: 2; }
 .product-toolbar select { flex: 1; }
+
+.order-product-toolbar {
+  margin-bottom: 10px;
+}
 
 .order-summary {
   display: flex;
@@ -1301,9 +1307,21 @@ ul {
     transition: transform 0.2s ease;
   }
   .sidebar.open { transform: translateX(0); }
-  .content { padding: 18px; }
+  .content {
+    width: 100%;
+    overflow-x: hidden;
+    padding: 12px;
+  }
+  .panel {
+    padding: 12px;
+  }
   .icon-button { display: inline-grid; place-items: center; }
   .topbar h1 { font-size: 24px; }
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
   .metrics-grid, .inline-form { grid-template-columns: 1fr; }
   .toolbar, .search-row, .product-toolbar, .form-actions { flex-direction: column; align-items: stretch; }
   .picking-mode-bar, .product-picking-controls { flex-direction: column; align-items: stretch; }
@@ -1334,6 +1352,76 @@ ul {
   }
   .picking-order-header { grid-template-columns: 1fr; }
   .order-top-actions { flex-direction: column; }
+  .order-summary {
+    gap: 6px;
+    padding: 9px;
+    font-size: 13px;
+  }
+  .order-notes-label textarea {
+    min-height: 44px;
+  }
+  #order-items-table {
+    min-width: 0;
+    white-space: normal;
+  }
+  #order-items-table thead {
+    display: none;
+  }
+  #order-items-table,
+  #order-items-table tbody,
+  #order-items-table tr,
+  #order-items-table td {
+    display: block;
+    width: 100%;
+  }
+  #order-items-table tr {
+    margin-bottom: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+  #order-items-table td {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid #eef2f7;
+    white-space: normal;
+    font-size: 13px;
+  }
+  #order-items-table td:last-child {
+    border-bottom: 0;
+  }
+  #order-items-table td::before {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+  }
+  #order-items-table td:nth-child(1)::before { content: "מוצר"; }
+  #order-items-table td:nth-child(2)::before { content: "כמות"; }
+  #order-items-table td:nth-child(3)::before { content: "הערה"; }
+  #order-items-table td:nth-child(4)::before { content: "פעולה"; }
+  #order-items-table .order-qty-input {
+    min-width: 0;
+    max-width: none;
+  }
+  #order-items-table .danger-action {
+    min-height: 32px;
+    padding: 5px 9px;
+  }
+  .order-product-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    padding: 6px 0;
+    background: var(--panel);
+  }
+  #order-suggested-table {
+    min-width: 0;
+    white-space: normal;
+  }
   #order-suggested-table th:nth-child(2),
   #order-suggested-table td:nth-child(2) {
     display: none;

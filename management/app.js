@@ -3201,10 +3201,10 @@ function setStatus(textValue) {
 
 async function readSavedDatabase(SQL) {
   const serverData = await readServerDatabase();
+  if (serverData) return { data: serverData, source: "server" };
   const browserData = await readBrowserDatabase();
   const serverScore = databaseScore(SQL, serverData);
   const browserScore = databaseScore(SQL, browserData);
-  if (serverData && serverScore >= browserScore) return { data: serverData, source: "server" };
   if (browserData) return { data: browserData, source: "browser" };
   return null;
 }

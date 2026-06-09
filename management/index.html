@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260609a" />
+    <link rel="stylesheet" href="./styles.css?v=20260609c" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260609b"></script>
+    <script defer src="./app.js?v=20260609c"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -154,12 +154,6 @@
               הערות להזמנה
               <textarea id="order-notes" rows="2" placeholder="טקסט חופשי להזמנה"></textarea>
             </label>
-            <div class="toolbar product-toolbar">
-              <div class="autocomplete-field">
-                <input id="order-product-query" type="search" placeholder="התחל להקליד מוצר או מק״ט" autocomplete="off" />
-                <div id="order-product-results" class="autocomplete-list hidden"></div>
-              </div>
-            </div>
             <div class="two-column">
               <div>
                 <div class="panel-header"><h2>שורות הזמנה</h2></div>
@@ -167,6 +161,12 @@
               </div>
               <div>
                 <div class="panel-header"><h2>מוצרים מומלצים</h2></div>
+                <div class="toolbar product-toolbar order-product-toolbar">
+                  <div class="autocomplete-field">
+                    <input id="order-product-query" type="search" placeholder="התחל להקליד מוצר או מק״ט" autocomplete="off" />
+                    <div id="order-product-results" class="autocomplete-list hidden"></div>
+                  </div>
+                </div>
                 <div class="table-wrap"><table id="order-suggested-table"></table></div>
                 <div class="order-recommendations-block">
                   <div class="panel-header"><h2>המלצות מכירה</h2></div>
