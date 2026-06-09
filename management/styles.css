@@ -659,6 +659,12 @@ textarea { resize: vertical; }
   margin-top: 22px;
 }
 
+.process-remove {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 5px 9px;
+}
+
 .process-tabs {
   display: flex;
   gap: 8px;

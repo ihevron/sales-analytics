@@ -285,6 +285,7 @@ function createManagementSchema() {
       picked_at TEXT,
       invoice_printed INTEGER NOT NULL DEFAULT 0,
       shipped_at TEXT,
+      process_hidden INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS customer_order_items (
@@ -322,6 +323,7 @@ function createManagementSchema() {
   ensureColumn("customer_orders", "picked_at", "TEXT");
   ensureColumn("customer_orders", "invoice_printed", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("customer_orders", "shipped_at", "TEXT");
+  ensureColumn("customer_orders", "process_hidden", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("customer_order_items", "item_status", "TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn("customer_order_items", "substitute_product_id", "TEXT");
   ensureColumn("customer_order_items", "action_sequence", "INTEGER");
@@ -1527,6 +1529,7 @@ function comparePriorityExportItems(a, b) {
 }
 
 function renderPicking() {
+  normalizeClosedOrderStatuses();
   document.querySelectorAll("[data-picking-mode]").forEach((button) => button.classList.toggle("active", button.dataset.pickingMode === state.pickingMode));
   document.getElementById("product-picking-controls").classList.toggle("hidden", state.pickingMode !== "product");
   if (state.pickingMode === "product") {
@@ -1546,6 +1549,8 @@ function renderPicking() {
     FROM customer_orders o
     LEFT JOIN customer_order_items i ON i.order_id = o.id
     WHERE o.status IN ('מוכן לאיסוף')
+      AND COALESCE(o.shipped_at, '') = ''
+      AND COALESCE(o.process_hidden, 0) = 0
     GROUP BY o.id
     ORDER BY o.id DESC
     LIMIT 250
@@ -1590,6 +1595,11 @@ function renderPicking() {
   bindPickingActions();
 }
 
+function normalizeClosedOrderStatuses() {
+  state.db.run("UPDATE customer_orders SET status = 'נשלחה' WHERE COALESCE(shipped_at, '') <> '' AND status <> 'נשלחה'");
+  state.db.run("UPDATE customer_orders SET status = 'picked' WHERE COALESCE(picked_at, '') <> '' AND COALESCE(shipped_at, '') = '' AND status = 'מוכן לאיסוף'");
+}
+
 function refreshPickingProductControls() {
   const category = state.selectedPickingCategory || "";
   const productRows = queryRows(`
@@ -1598,6 +1608,8 @@ function refreshPickingProductControls() {
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
     WHERE o.status = 'מוכן לאיסוף'
+      AND COALESCE(o.shipped_at, '') = ''
+      AND COALESCE(o.process_hidden, 0) = 0
       AND COALESCE(i.item_status, 'pending') = 'pending'
       AND (? = '' OR COALESCE(p.category, '') = ?)
     GROUP BY i.sku
@@ -1614,6 +1626,8 @@ function refreshPickingProductControls() {
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
     WHERE o.status = 'מוכן לאיסוף'
+      AND COALESCE(o.shipped_at, '') = ''
+      AND COALESCE(o.process_hidden, 0) = 0
       AND COALESCE(i.item_status, 'pending') = 'pending'
       AND COALESCE(p.category, '') <> ''
     ORDER BY category
@@ -1649,6 +1663,8 @@ function renderPickingByProduct() {
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
     WHERE o.status = 'מוכן לאיסוף'
+      AND COALESCE(o.shipped_at, '') = ''
+      AND COALESCE(o.process_hidden, 0) = 0
       AND COALESCE(i.item_status, 'pending') = 'pending'
       AND (? = '' OR i.sku = ?)
       AND (? = '' OR COALESCE(p.category, '') = ?)
@@ -1959,7 +1975,7 @@ function renderOrderHistory() {
   const pendingRows = queryRows(`
     SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit
     FROM customer_orders
-    WHERE status = ? AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    WHERE status = ? AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
   `, [ORDER_STATUSES[0], query, query, query]);
@@ -1974,13 +1990,14 @@ function renderOrderHistory() {
       <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
       <button class="small-action" data-open-picking-order="${row.id}">פתח בליקוט</button>
       <button class="small-action" data-manual-complete-picking="${row.id}">אשר ליקוט</button>
+      <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "processPending", "id", "desc");
 
   const pickedRows = queryRows(`
     SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit, invoice_printed
     FROM customer_orders
-    WHERE status = 'picked' AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    WHERE status = 'picked' AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
   `, [query, query, query]);
@@ -1996,6 +2013,7 @@ function renderOrderHistory() {
       <button class="small-action" data-export-order="${row.id}">יצוא לפריוריטי</button>
       <button class="small-action" data-return-picking="${row.id}">החזר לליקוט</button>
       <label class="inline-check"><input type="checkbox" data-invoice-printed="${row.id}" ${row.invoice_printed ? "checked" : ""} /> חשבונית הודפסה</label>
+      <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "history", "id", "desc");
   document.querySelectorAll("[data-return-picking]").forEach((button) => button.addEventListener("click", () => returnOrderToPicking(button.dataset.returnPicking)));
@@ -2005,7 +2023,7 @@ function renderOrderHistory() {
   const shippingRows = queryRows(`
     SELECT id, order_date, customer_no, customer_name, status, estimated_total
     FROM customer_orders
-    WHERE status = 'מוכן למשלוח' AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    WHERE status = 'מוכן למשלוח' AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
   `, [query, query, query]);
@@ -2017,6 +2035,7 @@ function renderOrderHistory() {
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
       <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
       <button class="primary-action" data-mark-shipped="${row.id}">נשלחה</button>
+      <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "shipping", "id", "desc");
   document.querySelectorAll("[data-open-picking-order]").forEach((button) => button.addEventListener("click", () => {
@@ -2026,6 +2045,7 @@ function renderOrderHistory() {
   document.querySelectorAll("[data-manual-complete-picking]").forEach((button) => button.addEventListener("click", () => manualCompletePickingOrder(button.dataset.manualCompletePicking)));
   document.querySelectorAll("[data-view-process-order]").forEach((button) => button.addEventListener("click", () => viewProcessOrder(button.dataset.viewProcessOrder, button)));
   document.querySelectorAll("[data-mark-shipped]").forEach((button) => button.addEventListener("click", () => markOrderShipped(button.dataset.markShipped)));
+  document.querySelectorAll("[data-hide-process-order]").forEach((button) => button.addEventListener("click", () => hideProcessOrder(button.dataset.hideProcessOrder)));
   renderMissedOrders(query);
 }
 
@@ -2397,9 +2417,16 @@ async function markInvoicePrinted(orderId) {
 
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
-  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, updated_at = ? WHERE id = ?", [now, now, orderId]);
+  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, now, orderId]);
   await persistDatabase();
   renderOrderHistory();
+}
+
+async function hideProcessOrder(orderId) {
+  state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), orderId]);
+  await persistDatabase();
+  renderOrderHistory();
+  renderPicking();
 }
 
 function refreshCallCustomerSelect() {
@@ -3267,10 +3294,12 @@ async function persistDatabase() {
 }
 
 function schedulePersistDatabase(delay = 900) {
+  const data = state.db.export();
+  writeBrowserDatabase(data);
   if (state.persistTimer) clearTimeout(state.persistTimer);
   state.persistTimer = setTimeout(() => {
     state.persistTimer = null;
-    persistDatabase();
+    writeServerDatabase(data);
   }, delay);
 }
 
