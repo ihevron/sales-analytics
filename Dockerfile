@@ -7,7 +7,6 @@ ENV HOST=0.0.0.0
 ENV DATA_DIR=/data
 
 COPY package.json ./
-RUN npm install --omit=dev
 COPY index.html app.js styles.css server.js README.md ./
 COPY management ./management
 

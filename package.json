@@ -8,9 +8,6 @@
     "start": "node server.js",
     "check": "node --check app.js && node --check server.js"
   },
-  "dependencies": {
-    "sql.js": "^1.10.3"
-  },
   "engines": {
     "node": ">=20"
   }
