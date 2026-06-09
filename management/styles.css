@@ -1414,54 +1414,61 @@ ul {
   }
   #order-items-table {
     min-width: 0;
-    white-space: normal;
+    table-layout: fixed;
+    white-space: nowrap;
   }
   #order-items-table thead {
     display: none;
   }
-  #order-items-table,
-  #order-items-table tbody,
-  #order-items-table tr,
-  #order-items-table td {
-    display: block;
-    width: 100%;
-  }
   #order-items-table tr {
-    margin-bottom: 8px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    border-bottom: 1px solid var(--line);
     background: #fff;
-    overflow: hidden;
   }
   #order-items-table td {
-    display: grid;
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 8px;
-    align-items: center;
-    padding: 6px 8px;
-    border-bottom: 1px solid #eef2f7;
-    white-space: normal;
-    font-size: 13px;
-  }
-  #order-items-table td:last-child {
-    border-bottom: 0;
-  }
-  #order-items-table td::before {
-    color: var(--muted);
+    padding: 5px 4px;
+    vertical-align: middle;
     font-size: 12px;
-    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  #order-items-table td:nth-child(1)::before { content: "מוצר"; }
-  #order-items-table td:nth-child(2)::before { content: "כמות"; }
-  #order-items-table td:nth-child(3)::before { content: "הערה"; }
-  #order-items-table td:nth-child(4)::before { content: "פעולה"; }
+  #order-items-table td:nth-child(1) { width: auto; }
+  #order-items-table td:nth-child(2) { width: 54px; }
+  #order-items-table td:nth-child(3) { width: 74px; }
+  #order-items-table td:nth-child(4) { width: 34px; }
+  #order-items-table td:nth-child(1) span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #order-items-table .order-line-note {
+    display: none;
+  }
   #order-items-table .order-qty-input {
+    width: 48px;
     min-width: 0;
-    max-width: none;
+    max-width: 48px;
+    min-height: 30px;
+    padding: 4px;
+    text-align: center;
+  }
+  #order-items-table [data-order-note] {
+    min-height: 30px;
+    padding: 4px;
+    font-size: 12px;
   }
   #order-items-table .danger-action {
-    min-height: 32px;
-    padding: 5px 9px;
+    width: 30px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+  }
+  #order-items-table .danger-action::after {
+    content: "X";
+    font-size: 14px;
+    line-height: 1;
   }
   .order-product-toolbar {
     position: sticky;
