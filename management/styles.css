@@ -243,6 +243,18 @@ th, td {
   color: var(--danger);
 }
 
+.suggested-product-button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: right;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 #order-items-table .order-qty-input {
   min-width: 88px;
   max-width: 120px;
@@ -327,7 +339,8 @@ tbody tr:hover { background: #fbfcff; }
 }
 
 .autocomplete-option:hover,
-.autocomplete-option:focus {
+.autocomplete-option:focus,
+.autocomplete-option.active {
   background: #f2f8f7;
 }
 
@@ -511,7 +524,8 @@ textarea { resize: vertical; }
   justify-content: flex-start;
 }
 
-.product-picking-controls select {
+.product-picking-controls select,
+.product-picking-controls input {
   min-width: min(280px, 100%);
 }
 
@@ -644,6 +658,29 @@ textarea { resize: vertical; }
   padding: 4px 0;
 }
 
+.picked-list-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.picked-list-item.dragging {
+  opacity: .55;
+}
+
+.drag-handle {
+  color: var(--muted);
+  cursor: grab;
+  font-weight: 900;
+}
+
+.picked-qty-inline {
+  width: 82px;
+  min-height: 30px;
+}
+
 .pick-note,
 .order-pick-note {
   display: block;
@@ -716,6 +753,14 @@ textarea { resize: vertical; }
   color: #fff;
   border-color: var(--primary);
   background: var(--primary);
+}
+
+.bulk-order-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
 .process-pane {
@@ -871,15 +916,17 @@ textarea { resize: vertical; }
 }
 
 .call-message-sent {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin-inline-start: 5px;
-  border-radius: 50%;
+  padding: 2px 7px;
+  border-radius: 999px;
   background: #dcfce7;
   color: #166534;
   font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .call-bulk-actions {
@@ -1440,8 +1487,8 @@ ul {
     min-width: 58px;
   }
   .pick-product-button {
-    font-size: 13px;
-    line-height: 1.25;
+    font-size: 15px;
+    line-height: 1.12;
   }
   .order-top-actions { flex-direction: column; }
   .order-summary {

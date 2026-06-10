@@ -63,10 +63,14 @@ const state = {
   pickingMode: "orders",
   selectedPickingProductSku: "",
   selectedPickingCategory: "",
+  pickingProductQuery: "",
+  orderProductActiveIndex: -1,
   callsDay: "ראשון",
   callsFilter: "",
   expandedCallCustomerNo: "",
   selectedCallCustomers: new Set(),
+  selectedProcessOrders: new Set(),
+  selectedMissedOrders: new Set(),
   processTab: "pending",
   persistTimer: null,
   serverSaveInProgress: false,
@@ -457,6 +461,7 @@ function bindEvents() {
   document.getElementById("order-customer-query").addEventListener("focus", renderOrderCustomerResults);
   document.getElementById("order-product-query").addEventListener("input", debounce(renderOrderProductResults, 150));
   document.getElementById("order-product-query").addEventListener("focus", renderOrderProductResults);
+  document.getElementById("order-product-query").addEventListener("keydown", handleOrderProductKeydown);
   document.getElementById("order-customer-results").addEventListener("mousedown", handleOrderCustomerResult);
   document.getElementById("order-product-results").addEventListener("mousedown", handleOrderProductResult);
   document.getElementById("product-modal-confirm").addEventListener("click", confirmProductDialog);
@@ -479,6 +484,11 @@ function bindEvents() {
     state.pickingMode = button.dataset.pickingMode;
     renderPicking();
   }));
+  document.getElementById("picking-product-query").addEventListener("input", debounce((event) => {
+    state.pickingProductQuery = event.target.value.trim();
+    state.selectedPickingProductSku = "";
+    renderPickingByProduct();
+  }, 150));
   document.getElementById("picking-product-select").addEventListener("change", (event) => {
     state.selectedPickingProductSku = event.target.value;
     renderPickingByProduct();
@@ -492,6 +502,11 @@ function bindEvents() {
   document.getElementById("order-save").addEventListener("click", saveOrder);
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
+  document.getElementById("export-selected-priority").addEventListener("click", exportSelectedPriorityOrders);
+  document.getElementById("clear-selected-orders").addEventListener("click", () => {
+    state.selectedProcessOrders.clear();
+    renderOrderHistory();
+  });
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
     state.processTab = button.dataset.processTab;
     renderOrderHistory();
@@ -1148,6 +1163,7 @@ function renderOrderProductResults() {
   const list = document.getElementById("order-product-results");
   const rawQuery = input.value.trim();
   const query = `%${rawQuery}%`;
+  state.orderProductActiveIndex = -1;
   if (!state.orderCustomer) {
     list.innerHTML = `<div class="empty-state">יש לבחור לקוח לפני בחירת מוצר</div>`;
     list.classList.toggle("hidden", !rawQuery && !document.activeElement.isSameNode(input));
@@ -1179,6 +1195,36 @@ function renderOrderProductResults() {
     `).join("")
     : `<div class="empty-state">אין מוצרים מתאימים</div>`;
   list.classList.toggle("hidden", !rawQuery && !document.activeElement.isSameNode(input));
+}
+
+function setActiveOrderProductOption(list, index) {
+  const options = [...list.querySelectorAll("[data-order-product]")];
+  if (!options.length) return;
+  state.orderProductActiveIndex = Math.max(0, Math.min(index, options.length - 1));
+  options.forEach((option, optionIndex) => option.classList.toggle("active", optionIndex === state.orderProductActiveIndex));
+  options[state.orderProductActiveIndex].scrollIntoView({ block: "nearest" });
+}
+
+function handleOrderProductKeydown(event) {
+  const list = document.getElementById("order-product-results");
+  const options = [...list.querySelectorAll("[data-order-product]")];
+  if (!options.length || list.classList.contains("hidden")) return;
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    setActiveOrderProductOption(list, state.orderProductActiveIndex + 1);
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    setActiveOrderProductOption(list, state.orderProductActiveIndex <= 0 ? options.length - 1 : state.orderProductActiveIndex - 1);
+  }
+  if (event.key === "Enter" && state.orderProductActiveIndex >= 0) {
+    event.preventDefault();
+    const option = options[state.orderProductActiveIndex];
+    if (option) openProductDialog(option.dataset.orderProduct);
+  }
+  if (event.key === "Escape") {
+    list.classList.add("hidden");
+  }
 }
 
 function closeAutocompleteOnOutsideClick(event) {
@@ -1332,8 +1378,9 @@ function renderOrderTables() {
   }, { total: 0, profit: 0 });
   document.getElementById("order-total").textContent = currency(totals.total);
   document.getElementById("order-profit").textContent = currency(totals.profit);
-  document.getElementById("order-lines-total").textContent = integer(state.orderItems.length);
-  document.getElementById("order-units-total").textContent = numberDisplay(state.orderItems.reduce((sum, item) => sum + orderLineUnits(item), 0));
+  const summaryItems = state.orderItems.filter((item) => !item.is_return && String(item.sku).trim() !== "999");
+  document.getElementById("order-lines-total").textContent = integer(summaryItems.length);
+  document.getElementById("order-units-total").textContent = numberDisplay(summaryItems.reduce((sum, item) => sum + orderLineUnits(item), 0));
   const duplicateKeys = new Set();
   const skuModeCounts = state.orderItems.reduce((acc, item) => {
     const key = `${item.sku}::${item.is_return ? "return" : "order"}`;
@@ -1394,18 +1441,25 @@ function renderSuggestedProducts() {
   const selected = new Set(state.orderItems.map((item) => item.sku));
   const blocked = [...selected, ...state.removedOrderSkus];
   const customerRows = customerNo ? queryRows(`
-    SELECT sku, COALESCE(product_desc, sku) AS product, quantity
-    FROM customer_product_summary
+    SELECT
+      sku,
+      COALESCE(MAX(product_desc), sku) AS product,
+      SUM(quantity) AS quantity,
+      CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+    FROM sales_raw
     WHERE customer_no = ?
+    GROUP BY sku
     ORDER BY quantity DESC
     LIMIT 200
   `, [customerNo]).filter((row) => row.sku && !blocked.includes(row.sku)).slice(0, 30) : [];
   const used = new Set([...blocked, ...customerRows.map((row) => row.sku)]);
   const fillerRows = customerRows.length < 30 ? queryRows(`
-    SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity
+    SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity, COALESCE(s.returns_percent, 0) AS returns_percent
     FROM products p
     LEFT JOIN (
-      SELECT sku, SUM(quantity) AS quantity FROM sales_raw GROUP BY sku
+      SELECT sku, SUM(quantity) AS quantity, CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      FROM sales_raw
+      GROUP BY sku
     ) s ON s.sku = p.sku
     WHERE p.sku <> ''
     ORDER BY COALESCE(s.quantity, 0) DESC, p.description
@@ -1413,12 +1467,12 @@ function renderSuggestedProducts() {
   `).filter((row) => row.sku && !used.has(row.sku)).slice(0, 30 - customerRows.length) : [];
   const rows = [...customerRows, ...fillerRows];
   renderTable("order-suggested-table", rows, [
-    { key: "product", label: "מוצר" },
+    { key: "product", label: "מוצר", render: (row) => `<button class="suggested-product-button" data-suggested-sku="${escapeAttr(row.sku)}">${escapeHtml(row.product)}</button>` },
     { key: "quantity", label: "כמות היסטורית", format: numberDisplay },
+    { key: "returns_percent", label: "% חזרות", render: (row) => `<span class="${returnPercentClass(row.returns_percent)}">${percent(row.returns_percent)}</span>` },
     { key: "actions", label: "פעולה", sortable: false, render: (row) => `
       <div class="suggested-actions">
-        <button class="small-action" data-suggested-sku="${escapeAttr(row.sku)}">הוספה</button>
-        <button class="small-action suggested-remove" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה">הסרה</button>
+        <button class="icon-button suggested-remove" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה">X</button>
       </div>
     ` },
   ], "suggested", "quantity", "desc");
@@ -1505,14 +1559,15 @@ async function saveOrder() {
   markCustomerOrderedCall(state.orderCustomer.customer_no, state.orderCustomer.customer_name, orderDate);
   await persistDatabase();
   alert(`הזמנה ${orderId} נשמרה`);
-  resetOrder();
+  resetOrder({ clearCustomer: true });
   renderPicking();
   renderOrderHistory();
 }
 
-function resetOrder() {
+function resetOrder(options = {}) {
   state.orderItems = [];
   state.removedOrderSkus = new Set();
+  if (options.clearCustomer) state.orderCustomer = null;
   document.getElementById("order-product-query").value = "";
   document.getElementById("order-notes").value = "";
   document.getElementById("order-customer-query").value = state.orderCustomer ? `${state.orderCustomer.customer_name} ${state.orderCustomer.customer_no}` : "";
@@ -1526,29 +1581,53 @@ function exportCurrentOrder() {
 }
 
 function exportPriorityRows(customer, items) {
-  const rows = [[customer.customer_no, customer.customer_name], ["הערות להזמנה", customer.notes || ""], [], ["קוד מוצר", "כמות", "שם מוצר", "הערת מוצר"]];
-  const exportItems = [...items].sort(comparePriorityExportItems);
-  exportItems.filter((item) => exportQuantityForPriority(item) !== 0).forEach((item) => rows.push([
-    item.export_sku || item.sku,
-    exportQuantityForPriority(item),
-    item.export_product_desc || item.product_desc,
-    item.note || "",
-  ]));
+  const rows = priorityRowsForCustomer(customer, items);
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   XLSX.utils.book_append_sheet(workbook, sheet, "Priority");
   XLSX.writeFile(workbook, `priority-${customer.customer_no}-${toSqlDate(new Date())}.xlsx`);
 }
 
+function priorityRowsForCustomer(customer, items) {
+  const rows = [[customer.customer_no, customer.customer_name], ["הערות להזמנה", customer.notes || ""], [], ["קוד מוצר", "כמות", "שם מוצר", "הערת מוצר"]];
+  const exportItems = priorityExportItems(items);
+  exportItems.filter((item) => exportQuantityForPriority(item) !== 0).forEach((item) => rows.push([
+    item.export_sku || item.sku,
+    exportQuantityForPriority(item),
+    item.export_product_desc || item.product_desc,
+    item.note || "",
+  ]));
+  return rows;
+}
+
+function priorityExportItems(items) {
+  const normalized = [...items];
+  const hasReturns = normalized.some((item) => Boolean(item.is_return) || item.item_status === "return" || exportQuantityForPriority(item) < 0);
+  const hasReturnMarker = normalized.some((item) => String(item.export_sku || item.sku).trim() === "999");
+  if (hasReturns && !hasReturnMarker) {
+    normalized.push({
+      sku: "999",
+      export_sku: "999",
+      product_desc: "החזרות",
+      export_product_desc: "החזרות",
+      export_quantity: 1,
+      is_return_marker: true,
+      export_sequence: -1,
+    });
+  }
+  return normalized.sort(comparePriorityExportItems);
+}
+
 function exportQuantityForPriority(item) {
+  if (item.is_return_marker) return 1;
   const rawQuantity = number(item.export_quantity ?? (item.is_return ? -Math.abs(number(item.quantity)) : item.quantity));
   const multiplier = (item.is_carton || number(item.is_carton)) ? (number(item.units_per_carton) || 1) : 1;
   return rawQuantity * multiplier;
 }
 
 function comparePriorityExportItems(a, b) {
-  const aReturn = exportQuantityForPriority(a) < 0 || Boolean(a.is_return) || a.item_status === "return";
-  const bReturn = exportQuantityForPriority(b) < 0 || Boolean(b.is_return) || b.item_status === "return";
+  const aReturn = exportQuantityForPriority(a) < 0 || Boolean(a.is_return) || a.item_status === "return" || Boolean(a.is_return_marker);
+  const bReturn = exportQuantityForPriority(b) < 0 || Boolean(b.is_return) || b.item_status === "return" || Boolean(b.is_return_marker);
   if (aReturn !== bReturn) return aReturn ? 1 : -1;
   if (aReturn && bReturn) {
     const aIs999 = String(a.export_sku || a.sku).trim() === "999";
@@ -1654,6 +1733,9 @@ function normalizeClosedOrderStatuses() {
 
 function refreshPickingProductControls() {
   const category = state.selectedPickingCategory || "";
+  const rawQuery = state.pickingProductQuery || "";
+  const productQuery = `%${rawQuery}%`;
+  const productQueryFilter = rawQuery ? `AND (i.sku LIKE ? OR i.product_desc LIKE ? OR p.description LIKE ?)` : "";
   const productRows = queryRows(`
     SELECT i.sku, COALESCE(MAX(p.description), MAX(i.product_desc), i.sku) AS description, COALESCE(MAX(p.pick_order), 999999) AS pick_order
     FROM customer_order_items i
@@ -1664,9 +1746,12 @@ function refreshPickingProductControls() {
       AND COALESCE(o.process_hidden, 0) = 0
       AND COALESCE(i.item_status, 'pending') = 'pending'
       AND (? = '' OR COALESCE(p.category, '') = ?)
+      ${productQueryFilter}
     GROUP BY i.sku
     ORDER BY pick_order, description
-  `, [category, category]);
+  `, rawQuery ? [category, category, productQuery, productQuery, productQuery] : [category, category]);
+  const productQueryInput = document.getElementById("picking-product-query");
+  if (productQueryInput && productQueryInput.value !== rawQuery) productQueryInput.value = rawQuery;
   const productSelect = document.getElementById("picking-product-select");
   productSelect.innerHTML = `<option value="">בחירת מוצר</option>` + productRows.map((row) => `<option value="${escapeAttr(row.sku)}">${escapeHtml(row.description)} - ${escapeHtml(row.sku)}</option>`).join("");
   productSelect.value = productRows.some((row) => row.sku === state.selectedPickingProductSku) ? state.selectedPickingProductSku : "";
@@ -1693,10 +1778,11 @@ function refreshPickingProductControls() {
 function renderPickingByProduct() {
   refreshPickingProductControls();
   const list = document.getElementById("picking-list");
-  if (!state.selectedPickingProductSku && !state.selectedPickingCategory) {
+  if (!state.selectedPickingProductSku && !state.selectedPickingCategory && !state.pickingProductQuery) {
     list.innerHTML = `<div class="empty-state">יש לבחור מוצר או קטגוריה לליקוט</div>`;
     return;
   }
+  const productQuery = `%${state.pickingProductQuery || ""}%`;
   const rows = queryRows(`
     SELECT
       i.id,
@@ -1720,8 +1806,9 @@ function renderPickingByProduct() {
       AND COALESCE(i.item_status, 'pending') = 'pending'
       AND (? = '' OR i.sku = ?)
       AND (? = '' OR COALESCE(p.category, '') = ?)
+      AND (? = '%%' OR i.sku LIKE ? OR i.product_desc LIKE ? OR p.description LIKE ?)
     ORDER BY COALESCE(p.pick_order, 999999), i.product_desc, o.customer_name, o.id
-  `, [state.selectedPickingProductSku, state.selectedPickingProductSku, state.selectedPickingCategory, state.selectedPickingCategory]);
+  `, [state.selectedPickingProductSku, state.selectedPickingProductSku, state.selectedPickingCategory, state.selectedPickingCategory, productQuery, productQuery, productQuery, productQuery]);
   const totalUnits = rows.reduce((sum, row) => sum + orderLineUnits(row), 0);
   const showProductColumn = !state.selectedPickingProductSku;
   list.innerHTML = `
@@ -1793,12 +1880,14 @@ function pickingOrderItemsHtml(orderId) {
   `).join("") : `<tr><td colspan="3" class="empty-state">אין מוצרים ממתינים לליקוט</td></tr>`;
   const orderNotes = pending[0]?.order_notes || firstRow("SELECT notes FROM customer_orders WHERE id = ?", [orderId]).notes || "";
   const pickedRows = done.length ? done.map((row) => `
-    <li>
+    <li class="picked-list-item" draggable="true" data-picked-item="${row.id}">
+      <span class="drag-handle" title="גרירה לשינוי סדר">⋮⋮</span>
       ${escapeHtml(row.product_desc)} - כמות לוקטה: ${numberDisplay(row.picked_quantity)}
       ${row.is_carton ? ` קרטון (${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון)` : ""}
       ${row.item_status === "substituted" ? ` - חלופי: ${escapeHtml(row.substitute_desc || row.substitute_product_id || "")}` : ""}
       ${row.note ? ` - הערה: ${escapeHtml(row.note)}` : ""}
-      <button class="small-action" data-edit-picked="${row.id}">עריכה</button>
+      <input class="picked-qty-inline" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity)}" data-picked-inline-qty="${row.id}" />
+      <button class="small-action" data-edit-picked="${row.id}">החזר לליקוט</button>
     </li>
   `).join("") : `<li>אין מוצרים שלוקטו עדיין</li>`;
   const canComplete = pending.length === 0 && done.length > 0;
@@ -1842,10 +1931,68 @@ function bindPickingActions() {
   document.querySelectorAll("[data-pick-missing]").forEach((button) => button.addEventListener("click", () => markPickingItem(button.dataset.pickMissing, "missing")));
   document.querySelectorAll("[data-substitute-item]").forEach((button) => button.addEventListener("click", () => openSubstituteDialog(button.dataset.substituteItem)));
   document.querySelectorAll("[data-edit-picked]").forEach((button) => button.addEventListener("click", () => editPickedItem(button.dataset.editPicked)));
+  document.querySelectorAll("[data-picked-inline-qty]").forEach((input) => {
+    input.addEventListener("focus", () => input.select());
+    input.addEventListener("change", () => updatePickedInlineQuantity(input.dataset.pickedInlineQty, input.value));
+  });
+  document.querySelectorAll("[data-picked-item]").forEach((item) => {
+    item.addEventListener("dragstart", (event) => {
+      event.dataTransfer?.setData("text/plain", item.dataset.pickedItem);
+      item.classList.add("dragging");
+    });
+    item.addEventListener("dragend", () => item.classList.remove("dragging"));
+    item.addEventListener("dragover", (event) => event.preventDefault());
+    item.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer?.getData("text/plain");
+      if (sourceId && sourceId !== item.dataset.pickedItem) reorderPickedItems(sourceId, item.dataset.pickedItem);
+    });
+  });
   document.querySelectorAll("[data-add-picking-product]").forEach((button) => button.addEventListener("click", () => openAddPickingProductDialog(button.dataset.addPickingProduct)));
   document.querySelectorAll("[data-pick-all]").forEach((button) => button.addEventListener("click", () => pickAllPendingItems(button.dataset.pickAll)));
   document.querySelectorAll("[data-complete-picking]").forEach((button) => button.addEventListener("click", () => completePickingOrder(button.dataset.completePicking)));
   document.querySelectorAll("[data-export-picked]").forEach((button) => button.addEventListener("click", () => exportSavedOrder(button.dataset.exportPicked)));
+}
+
+async function updatePickedInlineQuantity(itemId, rawValue) {
+  const pickedQuantity = quantityNumber(rawValue);
+  const row = firstRow("SELECT item_status, quantity, action_sequence FROM customer_order_items WHERE id = ?", [itemId]);
+  state.db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [pickedQuantity, itemId]);
+  queuePickingChange({
+    type: "itemStatus",
+    itemId,
+    itemStatus: row.item_status || "picked",
+    pickedQuantity,
+    actionSequence: number(row.action_sequence) || nextActionSequence(),
+  });
+  await savePickingNow({ silent: true });
+  renderPicking();
+}
+
+async function reorderPickedItems(sourceId, targetId) {
+  const source = firstRow("SELECT order_id FROM customer_order_items WHERE id = ?", [sourceId]);
+  if (!source.order_id) return;
+  const rows = queryRows(`
+    SELECT id, item_status, picked_quantity, quantity
+    FROM customer_order_items
+    WHERE order_id = ? AND COALESCE(item_status, 'pending') IN ('picked', 'substituted')
+    ORDER BY COALESCE(action_sequence, id), id
+  `, [source.order_id]);
+  const ids = rows.map((row) => String(row.id));
+  const sourceIndex = ids.indexOf(String(sourceId));
+  const targetIndex = ids.indexOf(String(targetId));
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [moved] = rows.splice(sourceIndex, 1);
+  rows.splice(targetIndex, 0, moved);
+  const sequenceStart = nextActionSequence();
+  rows.forEach((row, index) => {
+    const sequence = sequenceStart + index;
+    const pickedQuantity = number(row.picked_quantity) || number(row.quantity);
+    state.db.run("UPDATE customer_order_items SET action_sequence = ? WHERE id = ?", [sequence, row.id]);
+    queuePickingChange({ type: "itemStatus", itemId: row.id, itemStatus: row.item_status || "picked", pickedQuantity, actionSequence: sequence });
+  });
+  renderPicking();
+  await savePickingNow({ silent: true });
 }
 
 async function markPickingItem(itemId, status, skipCartonDialog = false) {
@@ -2055,9 +2202,8 @@ function renderOrderHistory() {
     { key: "estimated_total", label: "סכום משוער", format: currency },
     { key: "estimated_profit", label: "רווח משוער", format: currency },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
-      <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
       <button class="small-action" data-open-picking-order="${row.id}">פתח בליקוט</button>
-      <button class="small-action" data-manual-complete-picking="${row.id}">אשר ליקוט</button>
+      <button class="pick-action pick-ok" data-manual-complete-picking="${row.id}" title="אשר ליקוט">V</button>
       <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "processPending", "id", "desc");
@@ -2070,6 +2216,7 @@ function renderOrderHistory() {
     LIMIT 500
   `, [query, query, query]);
   renderTable("history-table", pickedRows, [
+    { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
     { key: "order_date", label: "תאריך" },
     { key: "customer_name", label: "לקוח" },
@@ -2084,6 +2231,10 @@ function renderOrderHistory() {
       <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "history", "id", "desc");
+  document.querySelectorAll("[data-process-select]").forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) state.selectedProcessOrders.add(String(input.dataset.processSelect));
+    else state.selectedProcessOrders.delete(String(input.dataset.processSelect));
+  }));
   document.querySelectorAll("[data-return-picking]").forEach((button) => button.addEventListener("click", () => returnOrderToPicking(button.dataset.returnPicking)));
   document.querySelectorAll("[data-export-order]").forEach((button) => button.addEventListener("click", () => exportSavedOrder(button.dataset.exportOrder)));
   document.querySelectorAll("[data-invoice-printed]").forEach((input) => input.addEventListener("change", () => markInvoicePrinted(input.dataset.invoicePrinted)));
@@ -2114,7 +2265,8 @@ function renderOrderHistory() {
   document.querySelectorAll("[data-view-process-order]").forEach((button) => button.addEventListener("click", () => viewProcessOrder(button.dataset.viewProcessOrder, button)));
   document.querySelectorAll("[data-mark-shipped]").forEach((button) => button.addEventListener("click", () => markOrderShipped(button.dataset.markShipped)));
   document.querySelectorAll("[data-hide-process-order]").forEach((button) => button.addEventListener("click", () => hideProcessOrder(button.dataset.hideProcessOrder)));
-  renderMissedOrders(query);
+  const missedCount = renderMissedOrders(query);
+  updateProcessTabCounts({ pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, missed: missedCount });
 }
 
 function renderMissedOrders(query) {
@@ -2154,11 +2306,13 @@ function renderMissedOrders(query) {
   const container = document.getElementById("missed-orders-list");
   container.innerHTML = grouped.size ? `
     <div class="missed-orders-toolbar">
+      <button class="danger-action" data-delete-selected-missed ${state.selectedMissedOrders.size ? "" : "disabled"}>מחיקת נבחרים</button>
       <button class="secondary-action" data-export-all-missed-word>יצוא כל החוסרים לוורד</button>
     </div>
     ${[...grouped.values()].map((group) => `
     <div class="missed-order">
       <div class="missed-order-header">
+        <label class="inline-check"><input type="checkbox" data-missed-select="${group.order.order_id}" ${state.selectedMissedOrders.has(String(group.order.order_id)) ? "checked" : ""} /> בחירה</label>
         <strong>הזמנת חוסרים ${integer(group.order.order_id)}</strong>
         <span>${escapeHtml(group.order.customer_name)}</span>
         <span>${escapeHtml(group.order.order_date)}</span>
@@ -2182,8 +2336,47 @@ function renderMissedOrders(query) {
       </div>
     </div>
   `).join("")}` : `<div class="empty-state">אין הזמנות שהוחמצו</div>`;
+  document.querySelectorAll("[data-missed-select]").forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) state.selectedMissedOrders.add(String(input.dataset.missedSelect));
+    else state.selectedMissedOrders.delete(String(input.dataset.missedSelect));
+    renderMissedOrders(query);
+  }));
   document.querySelectorAll("[data-export-all-missed-word]").forEach((button) => button.addEventListener("click", () => exportAllMissedOrdersWord(query)));
   document.querySelectorAll("[data-delete-missed]").forEach((button) => button.addEventListener("click", () => deleteMissedOrder(button.dataset.deleteMissed)));
+  document.querySelectorAll("[data-delete-selected-missed]").forEach((button) => button.addEventListener("click", deleteSelectedMissedOrders));
+  return grouped.size;
+}
+
+function updateProcessTabCounts(counts) {
+  const labels = {
+    pending: "ממתינות לליקוט",
+    picked: "הזמנות שלוקטו",
+    shipping: "מוכן למשלוח",
+    missed: "הזמנות שהוחמצו",
+  };
+  document.querySelectorAll("[data-process-tab]").forEach((button) => {
+    const key = button.dataset.processTab;
+    button.textContent = `${labels[key] || button.textContent} (${integer(counts[key] || 0)})`;
+  });
+}
+
+async function deleteSelectedMissedOrders() {
+  const ids = [...state.selectedMissedOrders];
+  if (!ids.length) return;
+  if (!confirm(`למחוק ${integer(ids.length)} הזמנות חוסרים?`)) return;
+  ids.forEach((orderId) => {
+    state.db.run(`
+      UPDATE customer_order_items
+      SET shortage_dismissed = 1
+      WHERE order_id = ? AND (
+        COALESCE(item_status, 'pending') = 'missing'
+        OR (COALESCE(item_status, 'pending') IN ('picked', 'substituted') AND COALESCE(picked_quantity, 0) < COALESCE(quantity, 0))
+      )
+    `, [orderId]);
+  });
+  state.selectedMissedOrders.clear();
+  await persistDatabase();
+  renderOrderHistory();
 }
 
 async function deleteMissedOrder(orderId) {
@@ -2451,7 +2644,12 @@ async function returnOrderToPicking(orderId) {
 
 function exportSavedOrder(orderId) {
   const order = firstRow("SELECT * FROM customer_orders WHERE id = ?", [orderId]);
-  const items = queryRows(`
+  const items = savedOrderExportItems(orderId);
+  exportPriorityRows(order, items);
+}
+
+function savedOrderExportItems(orderId) {
+  return queryRows(`
     SELECT
       CASE WHEN i.item_status = 'substituted' THEN i.substitute_product_id ELSE i.sku END AS export_sku,
       CASE WHEN i.item_status = 'substituted' THEN COALESCE(sp.description, i.substitute_product_id) ELSE i.product_desc END AS export_product_desc,
@@ -2478,7 +2676,23 @@ function exportSavedOrder(orderId) {
       )
     ORDER BY export_sort_group, export_pick_order, COALESCE(i.action_sequence, i.id), export_sequence
   `, [orderId]);
-  exportPriorityRows(order, items);
+}
+
+function exportSelectedPriorityOrders() {
+  const orderIds = [...state.selectedProcessOrders];
+  if (!orderIds.length) return alert("יש לבחור לפחות הזמנה אחת ליצוא.");
+  const rows = [];
+  orderIds.forEach((orderId, index) => {
+    const order = firstRow("SELECT * FROM customer_orders WHERE id = ?", [orderId]);
+    if (!order.id) return;
+    if (index > 0) rows.push([], []);
+    rows.push(...priorityRowsForCustomer(order, savedOrderExportItems(orderId)));
+  });
+  if (!rows.length) return alert("לא נמצאו הזמנות ליצוא.");
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(workbook, sheet, "Priority");
+  XLSX.writeFile(workbook, `priority-selected-${toSqlDate(new Date())}.xlsx`);
 }
 
 async function markInvoicePrinted(orderId) {
@@ -2657,6 +2871,7 @@ function renderCalls() {
   table.querySelectorAll("[data-call-template]").forEach((select) => select.addEventListener("change", () => updateCallMessagePreview(select)));
   table.querySelectorAll("[data-call-message]").forEach((textarea) => textarea.addEventListener("input", () => updateCallWhatsappLink(textarea.dataset.callMessage)));
   table.querySelectorAll("[data-call-whatsapp-send]").forEach((link) => link.addEventListener("click", () => markWhatsappSent(link.dataset.callWhatsappSend)));
+  table.querySelectorAll("[data-mark-whatsapp-sent]").forEach((button) => button.addEventListener("click", () => markWhatsappSent(button.dataset.markWhatsappSent)));
   table.querySelectorAll("[data-save-call-note]").forEach((button) => button.addEventListener("click", () => saveExpandedCallNote(button.dataset.saveCallNote)));
   table.querySelectorAll("[data-save-call-profile]").forEach((button) => button.addEventListener("click", () => saveCallProfile(button.dataset.saveCallProfile)));
 }
@@ -2799,7 +3014,7 @@ function callRowHtml(row) {
   const expanded = state.expandedCallCustomerNo === String(row.customer_no);
   const timeText = status === "call_again" ? row.call_again_time : (status === "no_answer" ? timeFromIso(row.updated_at) : "");
   const selected = state.selectedCallCustomers.has(String(row.customer_no));
-  const whatsappBadge = row.whatsapp_sent_at ? `<span class="call-message-sent" title="נשלחה הודעת WhatsApp">✓</span>` : "";
+  const whatsappBadge = row.whatsapp_sent_at ? `<span class="call-message-sent" title="נשלחה הודעת WhatsApp">נשלחה הודעה</span>` : "";
   return `
     <tr class="call-row status-${meta.className}">
       <td class="call-select-col"><input type="checkbox" data-call-select="${escapeAttr(row.customer_no)}" ${selected ? "checked" : ""} /></td>
@@ -2847,6 +3062,7 @@ function callDetailHtml(row) {
         <button data-call-status="no_answer" data-call-customer="${escapeAttr(row.customer_no)}">לא ענה</button>
         <button data-call-status="call_again" data-call-customer="${escapeAttr(row.customer_no)}">לחזור</button>
         <input class="call-time-picker" id="call-time-${escapeAttr(row.customer_no)}" data-call-time="${escapeAttr(row.customer_no)}" type="time" value="${escapeAttr(row.call_again_time || "")}" aria-label="שעת חזרה" />
+        <button type="button" data-mark-whatsapp-sent="${escapeAttr(row.customer_no)}">נשלחה הודעה</button>
       </div>
       <div class="call-contact-actions">
         <button class="call-icon-action order" data-order-from-call="${escapeAttr(row.customer_no)}" title="יצירת הזמנה" aria-label="יצירת הזמנה"><span>+</span><b>הזמנה</b></button>

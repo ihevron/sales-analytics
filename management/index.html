@@ -189,6 +189,7 @@
                 <span id="picking-sync-status" class="picking-sync-status">לא בוצעה שמירה בסשן הנוכחי</span>
               </div>
               <div id="product-picking-controls" class="product-picking-controls hidden">
+                <input id="picking-product-query" type="search" placeholder="חיפוש מוצר לליקוט" autocomplete="off" />
                 <select id="picking-product-select">
                   <option value="">בחירת מוצר</option>
                 </select>
@@ -210,19 +211,25 @@
               <button class="active" data-process-tab="pending">ממתינות לליקוט</button>
               <button data-process-tab="picked">הזמנות שלוקטו</button>
               <button data-process-tab="shipping">מוכן למשלוח</button>
+              <button data-process-tab="missed">הזמנות שהוחמצו</button>
             </div>
             <div class="process-pane active" data-process-pane="pending">
               <div class="table-wrap"><table id="process-pending-table"></table></div>
             </div>
             <div class="process-pane" data-process-pane="picked">
+              <div class="bulk-order-actions">
+                <button class="secondary-action" id="export-selected-priority" type="button">יצוא נבחרים לפריוריטי</button>
+                <button class="secondary-action" id="clear-selected-orders" type="button">ניקוי בחירה</button>
+              </div>
               <div class="table-wrap"><table id="history-table"></table></div>
             </div>
             <div class="process-pane" data-process-pane="shipping">
               <div class="table-wrap"><table id="shipping-table"></table></div>
             </div>
+            <div class="process-pane" data-process-pane="missed">
+              <div id="missed-orders-list" class="missed-orders-list"></div>
+            </div>
             <div id="process-order-detail" class="order-detail-panel hidden"></div>
-            <div class="panel-header process-subtitle"><h2>הזמנות שהוחמצו</h2></div>
-            <div id="missed-orders-list" class="missed-orders-list"></div>
           </div>
         </section>
 
