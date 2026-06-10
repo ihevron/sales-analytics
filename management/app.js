@@ -1708,6 +1708,7 @@ function priorityExportItems(items) {
       export_product_desc: "החזרות",
       export_quantity: 1,
       is_return_marker: true,
+      action_sequence: 999999999,
       export_sequence: -1,
     });
   }
@@ -1731,9 +1732,9 @@ function comparePriorityExportItems(a, b) {
     if (aIs999 !== bIs999) return aIs999 ? -1 : 1;
     return number(a.export_sequence ?? a.entry_sequence ?? a.action_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? b.action_sequence ?? 0);
   }
-  const pickOrderDiff = number(a.export_pick_order ?? 999999) - number(b.export_pick_order ?? 999999);
   const actionDiff = number(a.action_sequence ?? a.export_sequence ?? a.entry_sequence ?? 0) - number(b.action_sequence ?? b.export_sequence ?? b.entry_sequence ?? 0);
   if (actionDiff !== 0) return actionDiff;
+  const pickOrderDiff = number(a.export_pick_order ?? 999999) - number(b.export_pick_order ?? 999999);
   if (pickOrderDiff !== 0) return pickOrderDiff;
   return number(a.export_sequence ?? a.entry_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? 0);
 }
@@ -2754,6 +2755,7 @@ function savedOrderExportItems(orderId) {
       i.product_desc,
       i.note,
       i.item_status,
+      i.action_sequence,
       i.is_carton,
       i.units_per_carton,
       CASE WHEN i.item_status = 'return' THEN -ABS(COALESCE(i.quantity, 0)) ELSE i.picked_quantity END AS export_quantity,

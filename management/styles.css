@@ -2050,3 +2050,111 @@ td small {
     justify-content: flex-start;
   }
 }
+
+.calls-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.call-summary-card {
+  min-height: 42px;
+  padding: 5px 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.call-summary-card strong {
+  order: 0;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.call-summary-card span {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.process-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  overflow: visible;
+}
+
+.process-tabs button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 4px;
+  font-size: clamp(10px, 2.7vw, 13px);
+  white-space: nowrap;
+}
+
+.picking-order-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  padding: 8px 10px;
+}
+
+.picking-order-header strong,
+.picking-order-header span {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.picking-order-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.picking-order-items {
+  padding: 8px;
+}
+
+.order-pick-note {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 6px 6px 0;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .calls-summary {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .call-summary-card {
+    min-height: 36px;
+    padding: 4px 2px;
+    gap: 2px;
+  }
+
+  .call-summary-card strong {
+    font-size: 14px;
+  }
+
+  .call-summary-card span {
+    font-size: 9px;
+  }
+
+  .process-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .process-tabs button {
+    min-height: 32px;
+    padding: 5px 2px;
+    font-size: 10px;
+  }
+}
