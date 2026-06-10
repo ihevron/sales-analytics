@@ -15,6 +15,7 @@ const supabaseBucket = process.env.SUPABASE_BUCKET || "sales-analytics";
 const supabaseDbObject = process.env.SUPABASE_DB_OBJECT || "sales-analytics.sqlite";
 const useSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey);
 let SQLRuntimePromise = null;
+let dbMutationQueue = Promise.resolve();
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -122,6 +123,12 @@ async function writeCurrentDatabaseBuffer(body) {
   await fs.promises.rename(`${dbPath}.tmp`, dbPath);
 }
 
+function enqueueDbMutation(task) {
+  const run = dbMutationQueue.then(task, task);
+  dbMutationQueue = run.catch(() => {});
+  return run;
+}
+
 async function handleDatabaseGet(res) {
   if (useSupabase) {
     try {
@@ -180,7 +187,7 @@ function handleDatabasePost(req, res) {
     }
 
     if (useSupabase) {
-      writeDatabaseToSupabase(body)
+      enqueueDbMutation(() => writeDatabaseToSupabase(body))
         .then(() => send(res, 204))
         .catch((error) => {
           console.error(error);
@@ -189,13 +196,12 @@ function handleDatabasePost(req, res) {
       return;
     }
 
-    writeDatabaseToDisk(body, (error) => {
-      if (error) {
+    enqueueDbMutation(() => writeCurrentDatabaseBuffer(body))
+      .then(() => send(res, 204))
+      .catch((error) => {
+        console.error(error);
         send(res, 500, "save failed");
-        return;
-      }
-      send(res, 204);
-    });
+      });
   });
 
   req.on("error", () => send(res, 500, "request failed"));
@@ -293,6 +299,108 @@ async function handlePickingChanges(payload, res) {
   }
 }
 
+function ensureServerColumn(db, table, column, definition) {
+  const result = db.exec(`PRAGMA table_info(${table})`);
+  const columns = result[0]?.values?.map((row) => row[1]) || [];
+  if (!columns.includes(column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+async function handleOrderDelta(payload, res) {
+  const order = payload && typeof payload.order === "object" ? payload.order : null;
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  if (!order) {
+    sendJson(res, 400, { ok: false, error: "missing order" });
+    return;
+  }
+
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  const now = new Date().toISOString();
+  const clientOrderKey = String(order.client_order_key || "");
+
+  try {
+    ensureServerColumn(db, "customer_orders", "client_order_key", "TEXT");
+    db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_key ON customer_orders (client_order_key)");
+    db.run("BEGIN TRANSACTION");
+
+    let orderId = 0;
+    if (clientOrderKey) {
+      const existing = db.exec("SELECT id FROM customer_orders WHERE client_order_key = ? LIMIT 1", [clientOrderKey]);
+      orderId = Number(existing[0]?.values?.[0]?.[0] || 0);
+    }
+
+    if (!orderId) {
+      db.run(`
+        INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at, client_order_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        String(order.order_date || ""),
+        String(order.customer_no || ""),
+        String(order.customer_name || ""),
+        String(order.status || "מוכן לאיסוף"),
+        String(order.notes || ""),
+        numberValue(order.estimated_total),
+        numberValue(order.estimated_profit),
+        String(order.updated_at || now),
+        clientOrderKey || null,
+      ]);
+      orderId = Number(db.exec("SELECT last_insert_rowid()")[0]?.values?.[0]?.[0] || 0);
+
+      items.forEach((item) => {
+        db.run(`
+          INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, entry_sequence, is_carton, units_per_carton, estimated_price, estimated_profit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          orderId,
+          String(item.sku || ""),
+          String(item.product_desc || ""),
+          numberValue(item.quantity),
+          numberValue(item.picked_quantity),
+          String(item.note || ""),
+          String(item.item_status || "pending"),
+          numberValue(item.entry_sequence),
+          numberValue(item.is_carton) ? 1 : 0,
+          numberValue(item.units_per_carton) || 1,
+          numberValue(item.estimated_price),
+          numberValue(item.estimated_profit),
+        ]);
+      });
+    }
+
+    if (payload.call) {
+      const call = payload.call;
+      db.run("DELETE FROM customer_calls WHERE customer_no = ? AND call_date = ?", [String(call.customer_no || order.customer_no || ""), String(call.call_date || "")]);
+      db.run(`
+        INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, manual_order_id, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        String(call.call_date || ""),
+        String(call.customer_no || order.customer_no || ""),
+        String(call.customer_name || order.customer_name || ""),
+        String(call.status || "ordered"),
+        call.call_again_time || null,
+        call.whatsapp_sent_at || null,
+        numberValue(call.manual_order_id) || orderId || null,
+        String(call.notes || ""),
+        String(call.updated_at || now),
+      ]);
+    }
+
+    db.run("COMMIT");
+    const exported = Buffer.from(db.export());
+    await writeCurrentDatabaseBuffer(exported);
+    sendJson(res, 200, { ok: true, orderId, applied: 1 });
+  } catch (error) {
+    try {
+      db.run("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 function numberValue(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -358,7 +466,12 @@ const server = http.createServer((req, res) => {
   }
 
   if (requestPath === "/api/picking-changes" && req.method === "POST") {
-    handleJsonPost(req, res, (payload) => handlePickingChanges(payload, res));
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handlePickingChanges(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/order-delta" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrderDelta(payload, res)));
     return;
   }
 

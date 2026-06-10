@@ -51,6 +51,7 @@ const state = {
   orderItems: [],
   removedOrderSkus: new Set(),
   pendingProduct: null,
+  suppressProductFocusResults: false,
   expandedPickingOrderId: null,
   selectedPickingOrderId: null,
   substituteItemId: null,
@@ -344,6 +345,8 @@ function createManagementSchema() {
   ensureColumn("customer_orders", "invoice_printed", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("customer_orders", "shipped_at", "TEXT");
   ensureColumn("customer_orders", "process_hidden", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("customer_orders", "client_order_key", "TEXT");
+  state.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_key ON customer_orders (client_order_key)");
   ensureColumn("customer_order_items", "item_status", "TEXT NOT NULL DEFAULT 'pending'");
   ensureColumn("customer_order_items", "substitute_product_id", "TEXT");
   ensureColumn("customer_order_items", "action_sequence", "INTEGER");
@@ -515,6 +518,7 @@ function bindEvents() {
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
   document.getElementById("export-selected-priority").addEventListener("click", exportSelectedPriorityOrders);
+  document.getElementById("select-all-picked-orders").addEventListener("click", selectAllPickedProcessOrders);
   document.getElementById("clear-selected-orders").addEventListener("click", () => {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
@@ -1178,6 +1182,10 @@ function renderOrderProductResults() {
   const rawQuery = input.value.trim();
   const query = `%${rawQuery}%`;
   state.orderProductActiveIndex = -1;
+  if (state.suppressProductFocusResults) {
+    list.classList.add("hidden");
+    return;
+  }
   if (!state.orderCustomer) {
     list.innerHTML = `<div class="empty-state">יש לבחור לקוח לפני בחירת מוצר</div>`;
     list.classList.toggle("hidden", !rawQuery && !document.activeElement.isSameNode(input));
@@ -1336,8 +1344,13 @@ function focusOrderProductSearch() {
   if (window.matchMedia("(max-width: 760px)").matches) return;
   requestAnimationFrame(() => {
     const input = document.getElementById("order-product-query");
+    state.suppressProductFocusResults = true;
     input.focus();
     input.select();
+    document.getElementById("order-product-results").classList.add("hidden");
+    setTimeout(() => {
+      state.suppressProductFocusResults = false;
+    }, 180);
   });
 }
 
@@ -1459,6 +1472,11 @@ function renderSuggestedProducts() {
       sku,
       COALESCE(MAX(product_desc), sku) AS product,
       SUM(quantity) AS quantity,
+      CASE
+        WHEN julianday(MAX(sale_date)) > julianday(MIN(sale_date))
+          THEN SUM(quantity) / MAX(1, ((julianday(MAX(sale_date)) - julianday(MIN(sale_date)) + 1) / 7.0))
+        ELSE SUM(quantity) / 26.0
+      END AS weekly_quantity,
       CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
     FROM sales_raw
     WHERE customer_no = ?
@@ -1468,10 +1486,18 @@ function renderSuggestedProducts() {
   `, [customerNo]).filter((row) => row.sku && !blocked.includes(row.sku)).slice(0, 30) : [];
   const used = new Set([...blocked, ...customerRows.map((row) => row.sku)]);
   const fillerRows = customerRows.length < 30 ? queryRows(`
-    SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity, COALESCE(s.returns_percent, 0) AS returns_percent
+    SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity, COALESCE(s.weekly_quantity, 0) AS weekly_quantity, COALESCE(s.returns_percent, 0) AS returns_percent
     FROM products p
     LEFT JOIN (
-      SELECT sku, SUM(quantity) AS quantity, CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      SELECT
+        sku,
+        SUM(quantity) AS quantity,
+        CASE
+          WHEN julianday(MAX(sale_date)) > julianday(MIN(sale_date))
+            THEN SUM(quantity) / MAX(1, ((julianday(MAX(sale_date)) - julianday(MIN(sale_date)) + 1) / 7.0))
+          ELSE SUM(quantity) / 26.0
+        END AS weekly_quantity,
+        CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
       FROM sales_raw
       GROUP BY sku
     ) s ON s.sku = p.sku
@@ -1482,14 +1508,14 @@ function renderSuggestedProducts() {
   const rows = [...customerRows, ...fillerRows];
   renderTable("order-suggested-table", rows, [
     { key: "product", label: "מוצר", render: (row) => `<button class="suggested-product-button" data-suggested-sku="${escapeAttr(row.sku)}">${escapeHtml(row.product)}</button>` },
-    { key: "quantity", label: "כמות היסטורית", format: numberDisplay },
+    { key: "weekly_quantity", label: "ממוצע שבועי", format: numberDisplay },
     { key: "returns_percent", label: "% חזרות", render: (row) => `<span class="${returnPercentClass(row.returns_percent)}">${percent(row.returns_percent)}</span>` },
     { key: "actions", label: "פעולה", sortable: false, render: (row) => `
       <div class="suggested-actions">
         <button class="icon-button suggested-remove" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה">X</button>
       </div>
     ` },
-  ], "suggested", "quantity", "desc");
+  ], "suggested", "weekly_quantity", "desc");
   document.querySelectorAll("[data-suggested-sku]").forEach((button) => button.addEventListener("click", () => {
     openProductDialog(button.dataset.suggestedSku);
   }));
@@ -1533,6 +1559,7 @@ async function saveOrder() {
   const hasPickableItems = state.orderItems.some((item) => !item.is_return && number(item.quantity) > 0);
   const status = hasPickableItems ? "מוכן לאיסוף" : "picked";
   const notes = text(document.getElementById("order-notes").value);
+  const clientOrderKey = createClientOrderKey();
   const totals = state.orderItems.reduce((acc, item) => {
     const signedUnits = item.is_return ? -orderLineUnits(item) : orderLineUnits(item);
     acc.total += signedUnits * number(item.estimated_price);
@@ -1540,9 +1567,9 @@ async function saveOrder() {
     return acc;
   }, { total: 0, profit: 0 });
   state.db.run(`
-    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [orderDate, state.orderCustomer.customer_no, state.orderCustomer.customer_name, status, notes, totals.total, totals.profit, now]);
+    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at, client_order_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [orderDate, state.orderCustomer.customer_no, state.orderCustomer.customer_name, status, notes, totals.total, totals.profit, now, clientOrderKey]);
   const orderId = scalar("SELECT last_insert_rowid()");
   const stmt = state.db.prepare(`
     INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, entry_sequence, is_carton, units_per_carton, estimated_price, estimated_profit)
@@ -1571,8 +1598,14 @@ async function saveOrder() {
   });
   stmt.free();
   markCustomerOrderedCall(state.orderCustomer.customer_no, state.orderCustomer.customer_name, orderDate);
-  await persistDatabase();
-  alert(`הזמנה ${orderId} נשמרה`);
+  const serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
+  await writeBrowserDatabase(state.db.export());
+  if (serverResult.ok) {
+    await reloadDatabaseFromServer();
+  } else {
+    alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשמרה בדפדפן הזה בלבד.`);
+  }
+  alert(`הזמנה ${serverResult.orderId || orderId} נשמרה`);
   resetOrder({ clearCustomer: true });
   renderPicking();
   renderOrderHistory();
@@ -1587,6 +1620,55 @@ function resetOrder(options = {}) {
   document.getElementById("order-customer-query").value = state.orderCustomer ? `${state.orderCustomer.customer_name} ${state.orderCustomer.customer_no}` : "";
   document.getElementById("order-customer-label").textContent = state.orderCustomer ? `${state.orderCustomer.customer_name} (${state.orderCustomer.customer_no})` : "לא נבחר לקוח";
   renderOrderTables();
+}
+
+function createClientOrderKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `order-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }) {
+  const customerNo = state.orderCustomer.customer_no;
+  const customerName = state.orderCustomer.customer_name;
+  const callDay = nearestCallDayForOrder(customerNo, orderDate);
+  const callDate = callDateForDay(callDay, new Date(orderDate));
+  return {
+    order: {
+      client_order_key: clientOrderKey,
+      order_date: orderDate,
+      customer_no: customerNo,
+      customer_name: customerName,
+      status,
+      notes,
+      estimated_total: totals.total,
+      estimated_profit: totals.profit,
+      updated_at: now,
+    },
+    items: state.orderItems.filter((item) => number(item.quantity) > 0).map((item) => {
+      const signedUnits = item.is_return ? -orderLineUnits(item) : orderLineUnits(item);
+      return {
+        sku: item.sku,
+        product_desc: item.product_desc,
+        quantity: number(item.quantity),
+        picked_quantity: item.is_return ? number(item.quantity) : 0,
+        note: text(item.note),
+        item_status: item.is_return ? "return" : "pending",
+        entry_sequence: number(item.entry_sequence),
+        is_carton: item.is_carton ? 1 : 0,
+        units_per_carton: number(item.units_per_carton) || 1,
+        estimated_price: number(item.estimated_price),
+        estimated_profit: number(item.estimated_profit_per_unit) * signedUnits,
+      };
+    }),
+    call: {
+      call_date: callDate,
+      customer_no: customerNo,
+      customer_name: customerName,
+      status: "ordered",
+      notes: "סומן אוטומטית לאחר שידור הזמנה",
+      updated_at: now,
+    },
+  };
 }
 
 function exportCurrentOrder() {
@@ -1650,8 +1732,10 @@ function comparePriorityExportItems(a, b) {
     return number(a.export_sequence ?? a.entry_sequence ?? a.action_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? b.action_sequence ?? 0);
   }
   const pickOrderDiff = number(a.export_pick_order ?? 999999) - number(b.export_pick_order ?? 999999);
+  const actionDiff = number(a.action_sequence ?? a.export_sequence ?? a.entry_sequence ?? 0) - number(b.action_sequence ?? b.export_sequence ?? b.entry_sequence ?? 0);
+  if (actionDiff !== 0) return actionDiff;
   if (pickOrderDiff !== 0) return pickOrderDiff;
-  return number(a.action_sequence ?? a.export_sequence ?? a.entry_sequence ?? 0) - number(b.action_sequence ?? b.export_sequence ?? b.entry_sequence ?? 0);
+  return number(a.export_sequence ?? a.entry_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? 0);
 }
 
 function renderPicking() {
@@ -2238,7 +2322,6 @@ function renderOrderHistory() {
     { key: "estimated_total", label: "סכום משוער", format: currency },
     { key: "estimated_profit", label: "רווח משוער", format: currency },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
-      <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
       <button class="small-action" data-export-order="${row.id}">יצוא לפריוריטי</button>
       <button class="small-action" data-return-picking="${row.id}">החזר לליקוט</button>
       <label class="inline-check"><input type="checkbox" data-invoice-printed="${row.id}" ${row.invoice_printed ? "checked" : ""} /> חשבונית הודפסה</label>
@@ -2688,7 +2771,7 @@ function savedOrderExportItems(orderId) {
         (COALESCE(i.item_status, 'pending') IN ('picked', 'substituted') AND COALESCE(i.picked_quantity, 0) > 0)
         OR COALESCE(i.item_status, 'pending') = 'return'
       )
-    ORDER BY export_sort_group, export_pick_order, COALESCE(i.action_sequence, i.id), export_sequence
+    ORDER BY export_sort_group, COALESCE(i.action_sequence, 999999), export_pick_order, export_sequence
   `, [orderId]);
 }
 
@@ -2707,6 +2790,21 @@ function exportSelectedPriorityOrders() {
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   XLSX.utils.book_append_sheet(workbook, sheet, "Priority");
   XLSX.writeFile(workbook, `priority-selected-${toSqlDate(new Date())}.xlsx`);
+}
+
+function selectAllPickedProcessOrders() {
+  const query = `%${document.getElementById("history-query").value.trim()}%`;
+  const rows = queryRows(`
+    SELECT id
+    FROM customer_orders
+    WHERE status = 'picked'
+      AND COALESCE(process_hidden, 0) = 0
+      AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    ORDER BY id DESC
+    LIMIT 500
+  `, [query, query, query]);
+  rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
+  renderOrderHistory();
 }
 
 async function markInvoicePrinted(orderId) {
@@ -2790,11 +2888,12 @@ function createManualOrderFromCall(customerNo, customerName) {
   `, [customerNo, orderDate]);
   if (number(exists) > 0) return 0;
   const now = new Date().toISOString();
+  const clientOrderKey = createClientOrderKey();
   state.db.run(`
-    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at)
-    VALUES (?, ?, ?, ?, ?, 0, 0, ?)
-  `, [orderDate, customerNo, customerName, ORDER_STATUSES[0], "הזמנה ידנית מניהול שיחות", now]);
-  return number(scalar("SELECT last_insert_rowid()"));
+    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at, client_order_key)
+    VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+  `, [orderDate, customerNo, customerName, ORDER_STATUSES[0], "הזמנה ידנית מניהול שיחות", now, clientOrderKey]);
+  return { orderId: number(scalar("SELECT last_insert_rowid()")), clientOrderKey, orderDate, now };
 }
 
 async function saveCall(event) {
@@ -3223,14 +3322,45 @@ async function updateCustomerCallFromButton(button) {
     options.callAgainTime = timeInput.value;
   }
   if (status === "no_answer") options.notes = `לא ענה ${new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`;
+  let manualOrder = null;
   if (status === "ordered" && normalizeCallStatus(existingCall.status) !== "ordered" && !number(existingCall.manual_order_id)) {
-    const orderId = createManualOrderFromCall(row.customer_no, row.customer_name);
-    if (orderId) options.manualOrderId = orderId;
+    manualOrder = createManualOrderFromCall(row.customer_no, row.customer_name);
+    if (manualOrder?.orderId) options.manualOrderId = manualOrder.orderId;
   } else if (number(existingCall.manual_order_id)) {
     options.manualOrderId = number(existingCall.manual_order_id);
   }
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, options);
-  await persistDatabase();
+  if (manualOrder?.orderId) {
+    const delta = {
+      order: {
+        client_order_key: manualOrder.clientOrderKey,
+        order_date: manualOrder.orderDate,
+        customer_no: row.customer_no,
+        customer_name: row.customer_name,
+        status: ORDER_STATUSES[0],
+        notes: "הזמנה ידנית מניהול שיחות",
+        estimated_total: 0,
+        estimated_profit: 0,
+        updated_at: manualOrder.now,
+      },
+      items: [],
+      call: {
+        call_date: callDate,
+        customer_no: row.customer_no,
+        customer_name: row.customer_name,
+        status,
+        call_again_time: options.callAgainTime || null,
+        manual_order_id: manualOrder.orderId,
+        notes: options.notes || "",
+        updated_at: new Date().toISOString(),
+      },
+    };
+    const serverResult = await writeOrderDelta(delta);
+    await writeBrowserDatabase(state.db.export());
+    if (serverResult.ok) await reloadDatabaseFromServer();
+  } else {
+    await persistDatabase();
+  }
   renderCalls();
   renderOrderHistory();
   if (state.selectedCustomer) renderCustomerCalls(state.selectedCustomer.customer_no);
@@ -3704,4 +3834,39 @@ async function writePickingChanges(changes) {
     console.warn("לא ניתן לשמור שינויי ליקוט בשרת", error);
     return { ok: false, error: error.message };
   }
+}
+
+async function writeOrderDelta(delta) {
+  try {
+    const response = await fetch("/api/order-delta", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(delta),
+    });
+    if (response.ok) {
+      const result = await response.json().catch(() => ({}));
+      updateServerSaveStatus({ ok: result.ok !== false });
+      return { ok: result.ok !== false, orderId: result.orderId };
+    }
+    const textValue = await response.text();
+    updateServerSaveStatus({ ok: false, error: textValue });
+    return { ok: false, error: `${response.status} ${textValue}`.trim() };
+  } catch (error) {
+    console.warn("לא ניתן לשמור הזמנה בשרת", error);
+    updateServerSaveStatus({ ok: false, error: error.message });
+    return { ok: false, error: error.message };
+  }
+}
+
+async function reloadDatabaseFromServer() {
+  const data = await readServerDatabase();
+  if (!data) return false;
+  const SQL = await window.initSqlJs({ locateFile: (file) => SQL_WASM + file });
+  if (state.db) state.db.close();
+  state.db = new SQL.Database(data);
+  createSharedSchema();
+  createManagementSchema();
+  ensureSummaryTables();
+  await writeBrowserDatabase(data);
+  return true;
 }

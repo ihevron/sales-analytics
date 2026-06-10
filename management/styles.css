@@ -1145,6 +1145,20 @@ textarea { resize: vertical; }
   color: #166534;
 }
 
+.call-icon-action.order {
+  min-width: 108px;
+  color: #fff;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  border-color: transparent;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+  font-weight: 900;
+}
+
+.call-icon-action.order span {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
 .call-icon-action.phone span {
   background: #e0f2fe;
   color: #0369a1;
@@ -1993,7 +2007,7 @@ td small {
     bottom: 8px;
     z-index: 40;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 4px;
     padding: 6px;
     border: 1px solid rgba(226, 232, 240, 0.86);
@@ -2006,7 +2020,7 @@ td small {
   .bottom-nav .nav-item {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     min-height: 48px;
     padding: 5px 2px;
     color: var(--muted);
@@ -2018,11 +2032,11 @@ td small {
 
   .bottom-nav .nav-item span {
     width: auto;
-    font-size: 18px;
+    font-size: 17px;
   }
 
   .bottom-nav .nav-item small {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 900;
   }
 
