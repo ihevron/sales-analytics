@@ -1,17 +1,19 @@
 :root {
-  --bg: #f4f7f5;
+  --bg: #f8fafc;
   --panel: #ffffff;
-  --ink: #15152c;
-  --muted: #657087;
-  --line: #dfe4ee;
-  --primary: #1f7f27;
-  --primary-dark: #17631f;
-  --accent: #1b1738;
-  --danger: #b3261e;
-  --warn: #8a6500;
-  --ok: #176b3a;
-  --shadow: 0 12px 28px rgba(21, 21, 44, 0.07);
-  --soft-green: #edf8ef;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-soft: #dbeafe;
+  --accent: #111827;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #16a34a;
+  --neutral: #94a3b8;
+  --shadow: 0 2px 12px rgba(0,0,0,0.05);
+  --soft-green: #dcfce7;
 }
 
 * { box-sizing: border-box; }
@@ -1611,5 +1613,426 @@ ul {
   .call-bulk-actions button {
     max-width: none;
     flex: 1 1 100%;
+  }
+}
+
+/* Modern mobile-first UI refresh */
+body {
+  background: var(--bg);
+}
+
+button,
+.metric-card,
+.panel,
+.sub-panel,
+.nav-item,
+.segmented button,
+.process-tabs button,
+.calls-day-tabs button,
+.call-summary-card,
+.picking-tab {
+  transition: all 0.2s ease;
+}
+
+.sidebar {
+  background: #0f172a;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+}
+
+.brand {
+  padding: 8px 0 14px;
+}
+
+.brand-logo {
+  width: 50px;
+  height: 50px;
+}
+
+.main-nav {
+  gap: 5px;
+}
+
+.nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-weight: 800;
+}
+
+.nav-item span {
+  width: 22px;
+  text-align: center;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  color: #fff;
+  background: rgba(37, 99, 235, 0.22);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.content {
+  padding: 22px;
+}
+
+.topbar {
+  min-height: 82px;
+  max-height: 100px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.screen-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 22px;
+  flex: 0 0 auto;
+}
+
+.topbar h1 {
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.topbar p {
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.active-screen {
+  gap: 16px;
+}
+
+.metric-card,
+.panel,
+.sub-panel,
+.call-detail-card,
+.order-detail-panel,
+.missed-order {
+  background: var(--panel);
+  border: 0;
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100px;
+  padding: 16px;
+}
+
+.metric-card::before {
+  background: var(--primary);
+}
+
+.metric-card strong {
+  order: -1;
+  margin: 0 0 5px;
+  color: var(--ink);
+  font-size: 31px;
+  line-height: 1;
+}
+
+.metric-card span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.panel,
+.sub-panel {
+  padding: 15px;
+}
+
+.panel-header {
+  margin-bottom: 10px;
+}
+
+.panel-header h2,
+.sub-panel h3 {
+  font-size: 18px;
+}
+
+th,
+td {
+  padding: 9px 10px;
+}
+
+.compact-table th,
+.compact-table td,
+.call-row td {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.call-customer-button span,
+.pick-product-button,
+.suggested-product-button,
+td strong {
+  font-size: 15px;
+}
+
+.call-customer-button small,
+.pick-note,
+.order-pick-note,
+td small {
+  font-size: 11px;
+}
+
+.primary-action {
+  color: #fff;
+  border: 0;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}
+
+.primary-action:hover {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  transform: translateY(-1px);
+}
+
+.secondary-action,
+.small-action,
+.icon-button,
+.call-tool-button,
+.call-inline-actions button,
+.call-detail-actions button,
+.process-tabs button,
+.calls-day-tabs button,
+.call-summary-card,
+.picking-tab {
+  color: var(--ink);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.danger-action {
+  border: 0;
+  background: var(--danger);
+}
+
+.segmented,
+.process-tabs button,
+.calls-day-tabs button,
+.call-summary-card,
+.picking-tab {
+  border-radius: 12px;
+}
+
+.segmented button.active,
+.process-tabs button.active,
+.calls-day-tabs button.active,
+.call-summary-card.active,
+.picking-tab.active {
+  color: #fff;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.call-summary-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 100px;
+  justify-content: center;
+}
+
+.call-summary-card strong {
+  order: -1;
+  margin: 0 0 4px;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.call-summary-card span {
+  font-weight: 800;
+}
+
+.call-row {
+  border-right: 4px solid transparent;
+}
+
+.call-row.status-ordered { border-right-color: #16a34a; }
+.call-row.status-pending { border-right-color: #f59e0b; }
+.call-row.status-call-again { border-right-color: #f59e0b; }
+.call-row.status-no-answer { border-right-color: #ef4444; }
+.call-row.status-no-need { border-right-color: #94a3b8; }
+
+.call-status-pill.ordered { background: #dcfce7; color: #166534; }
+.call-status-pill.pending,
+.call-status-pill.call-again { background: #fef3c7; color: #92400e; }
+.call-status-pill.no-answer { background: #fee2e2; color: #991b1b; }
+.call-status-pill.no-need { background: #f1f5f9; color: #475569; }
+
+.bottom-nav {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --panel: #111827;
+    --ink: #e5e7eb;
+    --muted: #94a3b8;
+    --line: #1f2937;
+    --primary-soft: rgba(37, 99, 235, 0.18);
+    --shadow: 0 2px 12px rgba(0,0,0,0.28);
+  }
+
+  body,
+  .topbar,
+  .order-product-toolbar {
+    background: var(--bg);
+  }
+
+  .topbar,
+  .panel,
+  .sub-panel,
+  .metric-card,
+  .call-detail-card,
+  .order-detail-panel,
+  .missed-order,
+  .secondary-action,
+  .small-action,
+  .icon-button,
+  input,
+  select,
+  textarea {
+    background: var(--panel);
+    color: var(--ink);
+  }
+
+  table tr,
+  #order-items-table tr {
+    background: var(--panel);
+  }
+
+  .bottom-nav {
+    border-color: rgba(31, 41, 55, 0.92);
+    background: rgba(17, 24, 39, 0.94);
+  }
+}
+
+@media (max-width: 760px) {
+  body {
+    padding-bottom: 72px;
+  }
+
+  .content {
+    padding: 8px 8px 82px;
+  }
+
+  .topbar {
+    min-height: 64px;
+    max-height: 86px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 14px;
+  }
+
+  .screen-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
+    font-size: 18px;
+  }
+
+  .topbar h1 {
+    font-size: 19px;
+  }
+
+  .topbar p {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .active-screen {
+    gap: 10px;
+  }
+
+  .panel,
+  .sub-panel {
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .metrics-grid {
+    gap: 8px;
+  }
+
+  .metric-card {
+    min-height: 86px;
+    padding: 12px;
+  }
+
+  .metric-card strong {
+    font-size: 27px;
+  }
+
+  th,
+  td {
+    padding: 6px 7px;
+  }
+
+  .bottom-nav {
+    position: fixed;
+    inset-inline: 8px;
+    bottom: 8px;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid rgba(226, 232, 240, 0.86);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+    backdrop-filter: blur(14px);
+  }
+
+  .bottom-nav .nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 48px;
+    padding: 5px 2px;
+    color: var(--muted);
+    text-align: center;
+    justify-content: center;
+    border-radius: 14px;
+    box-shadow: none;
+  }
+
+  .bottom-nav .nav-item span {
+    width: auto;
+    font-size: 18px;
+  }
+
+  .bottom-nav .nav-item small {
+    font-size: 11px;
+    font-weight: 900;
+  }
+
+  .bottom-nav .nav-item.active {
+    color: var(--primary);
+    background: var(--primary-soft);
+    box-shadow: none;
+  }
+
+  .sidebar .nav-item {
+    justify-content: flex-start;
   }
 }

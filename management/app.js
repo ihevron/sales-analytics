@@ -91,6 +91,18 @@ const screens = {
   recommendations: { title: "המלצות מכירה", subtitle: "ניהול המלצות פעילות לכרטיס לקוח" },
 };
 
+const screenIcons = {
+  dashboard: "🏠",
+  "customer-search": "👥",
+  "customer-analysis": "📊",
+  "order-create": "📦",
+  picking: "📋",
+  "order-history": "🚚",
+  calls: "📞",
+  products: "📦",
+  recommendations: "📊",
+};
+
 const salesColumns = {
   customer_no: ["מס' לקוח", "מספר לקוח"],
   customer_name: ["שם לקוח"],
@@ -539,6 +551,8 @@ function showScreen(id) {
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.toggle("active-screen", screen.id === id));
   document.getElementById("screen-title").textContent = screens[id].title;
   document.getElementById("screen-subtitle").textContent = screens[id].subtitle;
+  const icon = document.getElementById("screen-icon");
+  if (icon) icon.textContent = screenIcons[id] || "📊";
   document.querySelector(".sidebar").classList.remove("open");
   if (id === "dashboard") renderDashboard();
   if (id === "customer-search") searchCustomers();

@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260609m" />
+    <link rel="stylesheet" href="./styles.css?v=20260610ui" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260609m"></script>
+    <script defer src="./app.js?v=20260610ui"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -22,14 +22,14 @@
           </div>
         </div>
         <nav class="main-nav">
-          <button class="nav-item active" data-screen="dashboard">דשבורד</button>
-          <button class="nav-item" data-screen="customer-search">ניתוח לקוחות</button>
-          <button class="nav-item" data-screen="order-create">יצירת הזמנה</button>
-          <button class="nav-item" data-screen="picking">ליקוט הזמנות</button>
-          <button class="nav-item" data-screen="order-history">הזמנות בתהליך</button>
-          <button class="nav-item" data-screen="calls">ניהול שיחות</button>
-          <button class="nav-item" data-screen="products">מוצרים</button>
-          <button class="nav-item" data-screen="recommendations">המלצות מכירה</button>
+          <button class="nav-item active" data-screen="dashboard"><span>🏠</span>דשבורד</button>
+          <button class="nav-item" data-screen="customer-search"><span>👥</span>ניתוח לקוחות</button>
+          <button class="nav-item" data-screen="order-create"><span>📦</span>יצירת הזמנה</button>
+          <button class="nav-item" data-screen="picking"><span>📋</span>ליקוט הזמנות</button>
+          <button class="nav-item" data-screen="order-history"><span>🚚</span>הזמנות בתהליך</button>
+          <button class="nav-item" data-screen="calls"><span>📞</span>ניהול שיחות</button>
+          <button class="nav-item" data-screen="products"><span>📦</span>מוצרים</button>
+          <button class="nav-item" data-screen="recommendations"><span>📊</span>המלצות מכירה</button>
         </nav>
         <div class="import-panel">
           <input id="sales-file" type="file" accept=".xlsx,.xls,.csv" hidden />
@@ -43,6 +43,7 @@
       <main class="content">
         <header class="topbar">
           <button id="menu-toggle" class="icon-button" aria-label="פתיחת תפריט">☰</button>
+          <span id="screen-icon" class="screen-icon" aria-hidden="true">🏠</span>
           <div>
             <h1 id="screen-title">דשבורד</h1>
             <p id="screen-subtitle">תמונת מצב ל-12 חודשים אחרונים</p>
@@ -304,6 +305,13 @@
           </div>
         </section>
       </main>
+      <nav class="bottom-nav" aria-label="ניווט מהיר במובייל">
+        <button class="nav-item active" data-screen="dashboard"><span>🏠</span><small>בית</small></button>
+        <button class="nav-item" data-screen="calls"><span>📞</span><small>שיחות</small></button>
+        <button class="nav-item" data-screen="order-create"><span>📦</span><small>הזמנות</small></button>
+        <button class="nav-item" data-screen="customer-search"><span>📊</span><small>דוחות</small></button>
+        <button class="nav-item" data-screen="products"><span>⚙️</span><small>הגדרות</small></button>
+      </nav>
     </div>
 
     <div id="product-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="product-modal-title">
