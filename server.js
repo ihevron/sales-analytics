@@ -511,7 +511,8 @@ async function handlePickingChanges(payload, res) {
     db.run("COMMIT");
     const exported = Buffer.from(db.export());
     await writeCurrentDatabaseBuffer(exported);
-    sendJson(res, 200, { ok: true, applied: changes.length });
+    const postgresResult = await mirrorPickingChangesToPostgres(changes);
+    sendJson(res, 200, { ok: true, applied: changes.length, postgres: postgresResult });
   } catch (error) {
     try {
       db.run("ROLLBACK");
@@ -526,6 +527,146 @@ function ensureServerColumn(db, table, column, definition) {
   const result = db.exec(`PRAGMA table_info(${table})`);
   const columns = result[0]?.values?.map((row) => row[1]) || [];
   if (!columns.includes(column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function sqliteRows(db, sql, params = []) {
+  const result = db.exec(sql, params);
+  if (!result.length) return [];
+  const columns = result[0].columns;
+  return result[0].values.map((values) => Object.fromEntries(columns.map((column, index) => [column, values[index]])));
+}
+
+async function postgresUpsert(table, rows, conflictKey) {
+  if (!usePostgresPreview || !rows.length) return { ok: true, skipped: true };
+  const conflict = conflictKey ? conflictKey.split(",").map((key) => encodeURIComponent(key.trim())).join(",") : "";
+  await postgresRest(`${table}${conflict ? `?on_conflict=${conflict}` : ""}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    },
+    body: JSON.stringify(rows),
+  });
+  return { ok: true, rows: rows.length };
+}
+
+async function postgresPatch(table, filter, row) {
+  if (!usePostgresPreview) return { ok: true, skipped: true };
+  await postgresRest(`${table}?${filter}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(row),
+  });
+  return { ok: true };
+}
+
+function normalizePostgresOrder(row) {
+  return {
+    id: numberValue(row.id),
+    order_date: row.order_date || null,
+    customer_no: String(row.customer_no || ""),
+    customer_name: String(row.customer_name || ""),
+    status: String(row.status || ""),
+    notes: row.notes || "",
+    estimated_total: numberValue(row.estimated_total),
+    estimated_profit: numberValue(row.estimated_profit),
+    picked_by: row.picked_by || null,
+    picked_at: row.picked_at || null,
+    invoice_printed: Boolean(numberValue(row.invoice_printed)),
+    shipped_at: row.shipped_at || null,
+    process_hidden: Boolean(numberValue(row.process_hidden)),
+    client_order_key: row.client_order_key || null,
+    updated_at: row.updated_at || new Date().toISOString(),
+  };
+}
+
+function normalizePostgresOrderItem(row) {
+  return {
+    id: numberValue(row.id),
+    order_id: numberValue(row.order_id),
+    sku: String(row.sku || ""),
+    product_desc: String(row.product_desc || ""),
+    quantity: numberValue(row.quantity),
+    picked_quantity: numberValue(row.picked_quantity),
+    note: row.note || "",
+    item_status: row.item_status || "pending",
+    substitute_product_id: row.substitute_product_id || null,
+    action_sequence: row.action_sequence === null || row.action_sequence === undefined ? null : numberValue(row.action_sequence),
+    entry_sequence: numberValue(row.entry_sequence),
+    is_carton: Boolean(numberValue(row.is_carton)),
+    units_per_carton: numberValue(row.units_per_carton) || 1,
+    shortage_dismissed: Boolean(numberValue(row.shortage_dismissed)),
+    estimated_price: numberValue(row.estimated_price),
+    estimated_profit: numberValue(row.estimated_profit),
+  };
+}
+
+async function mirrorOrderToPostgres(orderRow, itemRows, callRow = null) {
+  if (!usePostgresPreview || !orderRow?.id) return { ok: true, skipped: true };
+  try {
+    await postgresUpsert("customer_orders", [normalizePostgresOrder(orderRow)], "id");
+    await postgresUpsert("customer_order_items", itemRows.map(normalizePostgresOrderItem), "id");
+    if (callRow) await postgresUpsert("customer_calls", [callRow], "call_date,customer_no");
+    return { ok: true, orderId: numberValue(orderRow.id), items: itemRows.length };
+  } catch (error) {
+    console.error("postgres order mirror failed", error);
+    return { ok: false, error: error.message || "postgres order mirror failed" };
+  }
+}
+
+async function mirrorPickingChangesToPostgres(changes) {
+  if (!usePostgresPreview) return { ok: true, skipped: true };
+  try {
+    for (const change of changes) {
+      const type = String(change.type || "");
+      if (type === "itemQuantity") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          picked_quantity: numberValue(change.pickedQuantity),
+        });
+      }
+      if (type === "itemStatus") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          item_status: String(change.itemStatus || "pending"),
+          picked_quantity: numberValue(change.pickedQuantity),
+          action_sequence: numberValue(change.actionSequence),
+        });
+      }
+      if (type === "itemPending") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          item_status: "pending",
+          picked_quantity: numberValue(change.pickedQuantity),
+          action_sequence: null,
+          shortage_dismissed: false,
+        });
+      }
+      if (type === "productUnits") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          units_per_carton: numberValue(change.unitsPerCarton) || 1,
+        });
+        if (change.sku) {
+          await postgresPatch("products", `sku=eq.${encodeURIComponent(String(change.sku))}`, {
+            units_per_carton: numberValue(change.unitsPerCarton) || 1,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+      if (type === "completeOrder") {
+        await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(numberValue(change.orderId))}`, {
+          status: "picked",
+          picked_by: String(change.pickedBy || "מלקט"),
+          picked_at: String(change.pickedAt || new Date().toISOString()),
+          updated_at: String(change.updatedAt || new Date().toISOString()),
+        });
+      }
+    }
+    return { ok: true, applied: changes.length };
+  } catch (error) {
+    console.error("postgres picking mirror failed", error);
+    return { ok: false, error: error.message || "postgres picking mirror failed" };
+  }
 }
 
 async function handleOrderDelta(payload, res) {
@@ -611,9 +752,27 @@ async function handleOrderDelta(payload, res) {
     }
 
     db.run("COMMIT");
+    const savedOrderRows = sqliteRows(db, "SELECT * FROM customer_orders WHERE id = ?", [orderId]);
+    const savedItemRows = sqliteRows(db, "SELECT * FROM customer_order_items WHERE order_id = ? ORDER BY id", [orderId]);
     const exported = Buffer.from(db.export());
     await writeCurrentDatabaseBuffer(exported);
-    sendJson(res, 200, { ok: true, orderId, applied: 1 });
+    let postgresCall = null;
+    if (payload.call) {
+      const call = payload.call;
+      postgresCall = {
+        call_date: String(call.call_date || ""),
+        customer_no: String(call.customer_no || order.customer_no || ""),
+        customer_name: String(call.customer_name || order.customer_name || ""),
+        status: String(call.status || "ordered"),
+        call_again_time: call.call_again_time || null,
+        whatsapp_sent_at: call.whatsapp_sent_at || null,
+        manual_order_id: numberValue(call.manual_order_id) || orderId || null,
+        notes: String(call.notes || ""),
+        updated_at: String(call.updated_at || now),
+      };
+    }
+    const postgresResult = await mirrorOrderToPostgres(savedOrderRows[0], savedItemRows, postgresCall);
+    sendJson(res, 200, { ok: true, orderId, applied: 1, postgres: postgresResult });
   } catch (error) {
     try {
       db.run("ROLLBACK");
