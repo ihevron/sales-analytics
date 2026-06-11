@@ -2216,11 +2216,29 @@ function exportCurrentOrder() {
 }
 
 function exportPriorityRows(customer, items) {
-  const rows = priorityRowsForCustomer(customer, items);
+  const rows = priorityFlatRowsForOrders([{ customer, items }]);
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   XLSX.utils.book_append_sheet(workbook, sheet, "Priority");
   XLSX.writeFile(workbook, `priority-${customer.customer_no}-${toSqlDate(new Date())}.xlsx`);
+}
+
+function priorityFlatRowsForOrders(orders) {
+  const rows = [];
+  let sequence = 1;
+  orders.forEach(({ customer, items }) => {
+    rows.push([sequence, customer.customer_no, "", "", 1]);
+    sequence += 1;
+    priorityExportItems(items).forEach((item) => {
+      const sku = String(item.export_sku || item.sku || "").trim();
+      const quantity = exportQuantityForPriority(item);
+      const isReturnMarker = sku === "999" || item.is_return_marker;
+      if (!sku || (!isReturnMarker && quantity === 0)) return;
+      rows.push([sequence, "", sku, isReturnMarker ? 0 : quantity, 2]);
+      sequence += 1;
+    });
+  });
+  return rows;
 }
 
 function priorityRowsForCustomer(customer, items) {
@@ -2255,7 +2273,7 @@ function priorityExportItems(items) {
 }
 
 function exportQuantityForPriority(item) {
-  if (item.is_return_marker) return 1;
+  if (item.is_return_marker) return 0;
   const rawQuantity = number(item.export_quantity ?? (item.is_return ? -Math.abs(number(item.quantity)) : item.quantity));
   const multiplier = (item.is_carton || number(item.is_carton)) ? (number(item.units_per_carton) || 1) : 1;
   return rawQuantity * multiplier;
@@ -3432,13 +3450,13 @@ function savedOrderExportItems(orderId) {
 function exportSelectedPriorityOrders() {
   const orderIds = [...state.selectedProcessOrders];
   if (!orderIds.length) return alert("יש לבחור לפחות הזמנה אחת ליצוא.");
-  const rows = [];
-  orderIds.forEach((orderId, index) => {
+  const orders = [];
+  orderIds.forEach((orderId) => {
     const order = firstRow("SELECT * FROM customer_orders WHERE id = ?", [orderId]);
     if (!order.id) return;
-    if (index > 0) rows.push([], []);
-    rows.push(...priorityRowsForCustomer(order, savedOrderExportItems(orderId)));
+    orders.push({ customer: order, items: savedOrderExportItems(orderId) });
   });
+  const rows = priorityFlatRowsForOrders(orders);
   if (!rows.length) return alert("לא נמצאו הזמנות ליצוא.");
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
