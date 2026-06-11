@@ -527,6 +527,13 @@ function bindEvents() {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
+  document.getElementById("select-all-shipping-orders").addEventListener("click", selectAllShippingProcessOrders);
+  document.getElementById("clear-selected-shipping-orders").addEventListener("click", () => {
+    state.selectedProcessOrders.clear();
+    renderOrderHistory();
+  });
+  document.getElementById("mark-selected-shipped").addEventListener("click", markSelectedShippingOrdersShipped);
+  document.getElementById("hide-selected-shipping-orders").addEventListener("click", hideSelectedShippingOrders);
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
     state.processTab = button.dataset.processTab;
     renderOrderHistory();
@@ -2525,10 +2532,6 @@ async function renderOrderHistory() {
       <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "history", "id", "desc");
-  document.querySelectorAll("[data-process-select]").forEach((input) => input.addEventListener("change", () => {
-    if (input.checked) state.selectedProcessOrders.add(String(input.dataset.processSelect));
-    else state.selectedProcessOrders.delete(String(input.dataset.processSelect));
-  }));
   document.querySelectorAll("[data-return-picking]").forEach((button) => button.addEventListener("click", () => returnOrderToPicking(button.dataset.returnPicking)));
   document.querySelectorAll("[data-export-order]").forEach((button) => button.addEventListener("click", () => exportSavedOrder(button.dataset.exportOrder)));
   document.querySelectorAll("[data-invoice-printed]").forEach((input) => input.addEventListener("change", () => markInvoicePrinted(input.dataset.invoicePrinted)));
@@ -2541,6 +2544,7 @@ async function renderOrderHistory() {
     LIMIT 500
   `, [query, query, query]);
   renderTable("shipping-table", shippingRows, [
+    { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
     { key: "order_date", label: "תאריך" },
     { key: "customer_name", label: "לקוח" },
@@ -2559,8 +2563,16 @@ async function renderOrderHistory() {
   document.querySelectorAll("[data-view-process-order]").forEach((button) => button.addEventListener("click", () => viewProcessOrder(button.dataset.viewProcessOrder, button)));
   document.querySelectorAll("[data-mark-shipped]").forEach((button) => button.addEventListener("click", () => markOrderShipped(button.dataset.markShipped)));
   document.querySelectorAll("[data-hide-process-order]").forEach((button) => button.addEventListener("click", () => hideProcessOrder(button.dataset.hideProcessOrder)));
+  bindProcessOrderSelection();
   const missedCount = renderMissedOrders(query);
   updateProcessTabCounts({ pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, missed: missedCount });
+}
+
+function bindProcessOrderSelection() {
+  document.querySelectorAll("[data-process-select]").forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) state.selectedProcessOrders.add(String(input.dataset.processSelect));
+    else state.selectedProcessOrders.delete(String(input.dataset.processSelect));
+  }));
 }
 
 function renderMissedOrders(query) {
@@ -3023,6 +3035,67 @@ function selectAllPickedProcessOrders() {
   renderOrderHistory();
 }
 
+function selectAllShippingProcessOrders() {
+  const query = `%${document.getElementById("history-query").value.trim()}%`;
+  const rows = queryRows(`
+    SELECT id
+    FROM customer_orders
+    WHERE status = 'מוכן למשלוח'
+      AND COALESCE(process_hidden, 0) = 0
+      AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    ORDER BY id DESC
+    LIMIT 500
+  `, [query, query, query]);
+  rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
+  renderOrderHistory();
+}
+
+function selectedShippingOrderIds() {
+  const ids = [...state.selectedProcessOrders].map((id) => String(id));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return queryRows(`
+    SELECT id
+    FROM customer_orders
+    WHERE CAST(id AS TEXT) IN (${placeholders})
+      AND status = 'מוכן למשלוח'
+      AND COALESCE(process_hidden, 0) = 0
+  `, ids).map((row) => String(row.id));
+}
+
+async function markSelectedShippingOrdersShipped() {
+  const ids = selectedShippingOrderIds();
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית מוכן למשלוח.");
+  if (!confirm(`לסמן ${integer(ids.length)} הזמנות כנשלחו?`)) return;
+  const now = new Date().toISOString();
+  const results = await Promise.all(ids.map(async (orderId) => {
+    state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
+    return patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+  }));
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length) alert(`${integer(failed.length)} הזמנות לא נשמרו לשרת.`);
+  renderOrderHistory();
+}
+
+async function hideSelectedShippingOrders() {
+  const ids = selectedShippingOrderIds();
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית מוכן למשלוח.");
+  if (!confirm(`להסיר ${integer(ids.length)} הזמנות מהרשימה?`)) return;
+  const now = new Date().toISOString();
+  const results = await Promise.all(ids.map(async (orderId) => {
+    state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [now, orderId]);
+    return patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
+  }));
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length) alert(`${integer(failed.length)} הזמנות לא נשמרו לשרת.`);
+  renderOrderHistory();
+  renderPicking();
+}
+
 async function patchPostgresOrder(orderId, values) {
   try {
     const response = await fetch("/api/postgres/order-patch", {
@@ -3041,24 +3114,29 @@ async function patchPostgresOrder(orderId, values) {
 async function markInvoicePrinted(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = 'מוכן למשלוח', updated_at = ? WHERE id = ?", [now, orderId]);
-  await patchPostgresOrder(orderId, { invoice_printed: true, status: "מוכן למשלוח", updated_at: now });
-  await persistDatabase();
+  const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: "מוכן למשלוח", updated_at: now });
+  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
+  await writeBrowserDatabase(state.db.export());
   renderOrderHistory();
 }
 
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
-  await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
-  await persistDatabase();
+  state.selectedProcessOrders.delete(String(orderId));
+  const result = await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
+  await writeBrowserDatabase(state.db.export());
   renderOrderHistory();
 }
 
 async function hideProcessOrder(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [now, orderId]);
-  await patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
-  await persistDatabase();
+  state.selectedProcessOrders.delete(String(orderId));
+  const result = await patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
+  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
+  await writeBrowserDatabase(state.db.export());
   renderOrderHistory();
   renderPicking();
 }
