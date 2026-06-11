@@ -292,6 +292,44 @@ async function handlePostgresCallProfile(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres" });
 }
 
+async function handlePostgresOrderHistory(req, res) {
+  if (!requirePostgres(res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const query = (url.searchParams.get("q") || "").trim().toLowerCase();
+  const allOrders = await postgresRows("customer_orders?select=id,order_date,customer_no,customer_name,status,notes,estimated_total,estimated_profit,picked_by,picked_at,invoice_printed,shipped_at,process_hidden,client_order_key,updated_at&order=id.desc&limit=1000");
+  const relevantStatuses = new Set(["מוכן לאיסוף", "picked", "מוכן למשלוח", "נשלחה"]);
+  const orders = allOrders
+    .filter((row) => relevantStatuses.has(String(row.status || "")))
+    .filter((row) => !row.process_hidden)
+    .filter((row) => !query
+      || String(row.customer_name || "").toLowerCase().includes(query)
+      || String(row.customer_no || "").toLowerCase().includes(query)
+      || String(row.id || "").includes(query))
+    .slice(0, 500);
+  const orderIds = orders.map((row) => Number(row.id)).filter(Boolean);
+  const items = orderIds.length
+    ? await postgresRows(`customer_order_items?select=id,order_id,sku,product_desc,quantity,picked_quantity,note,item_status,substitute_product_id,action_sequence,entry_sequence,is_carton,units_per_carton,shortage_dismissed,estimated_price,estimated_profit&order_id=in.(${orderIds.join(",")})&order=order_id.desc,id.asc&limit=5000`)
+    : [];
+  sendJson(res, 200, { ok: true, source: "postgres", orders, items });
+}
+
+async function handlePostgresOrderPatch(payload, res) {
+  if (!requirePostgres(res)) return;
+  const orderId = Number(payload.order_id || payload.id || 0);
+  if (!orderId) {
+    sendJson(res, 400, { ok: false, error: "order_id is required" });
+    return;
+  }
+  const allowed = new Set(["status", "invoice_printed", "shipped_at", "process_hidden", "picked_by", "picked_at", "updated_at"]);
+  const row = {};
+  Object.entries(payload.values || {}).forEach(([key, value]) => {
+    if (allowed.has(key)) row[key] = value;
+  });
+  row.updated_at = row.updated_at || new Date().toISOString();
+  await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
+  sendJson(res, 200, { ok: true, source: "postgres" });
+}
+
 function uniqueValues(values) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
 }
@@ -900,6 +938,19 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/postgres/call-profile" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => handlePostgresCallProfile(payload, res));
+    return;
+  }
+
+  if (requestPath === "/api/postgres/order-history" && req.method === "GET") {
+    handlePostgresOrderHistory(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres order history failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/order-patch" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresOrderPatch(payload, res));
     return;
   }
 

@@ -547,7 +547,7 @@ async function refreshAll() {
   refreshOrderSelectors();
   renderOrderTables();
   renderPicking();
-  renderOrderHistory();
+  await renderOrderHistory();
   refreshCallCustomerSelect();
   await renderCalls();
   renderRecommendations();
@@ -2328,16 +2328,101 @@ async function completePickingOrder(orderId) {
 
 async function manualCompletePickingOrder(orderId) {
   const now = new Date().toISOString();
-  state.db.run("UPDATE customer_order_items SET item_status = 'picked', picked_quantity = CASE WHEN COALESCE(picked_quantity, 0) > 0 THEN picked_quantity ELSE quantity END, action_sequence = COALESCE(action_sequence, ?) WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'", [nextActionSequence(), orderId]);
+  const pendingItems = queryRows(`
+    SELECT id, quantity, picked_quantity
+    FROM customer_order_items
+    WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'
+  `, [orderId]);
+  const actionSequence = nextActionSequence();
+  state.db.run("UPDATE customer_order_items SET item_status = 'picked', picked_quantity = CASE WHEN COALESCE(picked_quantity, 0) > 0 THEN picked_quantity ELSE quantity END, action_sequence = COALESCE(action_sequence, ?) WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'", [actionSequence, orderId]);
   state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["ליקוט ידני", now, now, orderId]);
-  await persistDatabase();
+  pendingItems.forEach((item) => queuePickingChange({
+    type: "itemStatus",
+    itemId: item.id,
+    itemStatus: "picked",
+    pickedQuantity: number(item.picked_quantity) > 0 ? number(item.picked_quantity) : number(item.quantity),
+    actionSequence,
+  }));
+  queuePickingChange({ type: "completeOrder", orderId, pickedBy: "ליקוט ידני", pickedAt: now, updatedAt: now });
+  await savePickingNow();
   state.processTab = "picked";
   renderPicking();
   renderOrderHistory();
 }
 
-function renderOrderHistory() {
+async function syncOrderHistoryFromPostgres() {
+  try {
+    const rawQuery = document.getElementById("history-query")?.value?.trim() || "";
+    const params = new URLSearchParams({ q: rawQuery });
+    const response = await fetch(`/api/postgres/order-history?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    if (!data.ok) return false;
+    const orders = data.orders || [];
+    const items = data.items || [];
+    state.db.run("BEGIN TRANSACTION");
+    orders.forEach((order) => {
+      state.db.run("DELETE FROM customer_orders WHERE id = ?", [number(order.id)]);
+      state.db.run(`
+        INSERT INTO customer_orders (id, order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, picked_by, picked_at, invoice_printed, shipped_at, process_hidden, updated_at, client_order_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        number(order.id),
+        order.order_date || toSqlDate(new Date()),
+        text(order.customer_no),
+        text(order.customer_name),
+        text(order.status),
+        text(order.notes),
+        number(order.estimated_total),
+        number(order.estimated_profit),
+        order.picked_by || null,
+        order.picked_at || null,
+        order.invoice_printed ? 1 : 0,
+        order.shipped_at || null,
+        order.process_hidden ? 1 : 0,
+        order.updated_at || new Date().toISOString(),
+        order.client_order_key || null,
+      ]);
+    });
+    const orderIds = [...new Set(items.map((item) => number(item.order_id)).filter(Boolean))];
+    orderIds.forEach((orderId) => state.db.run("DELETE FROM customer_order_items WHERE order_id = ?", [orderId]));
+    items.forEach((item) => {
+      state.db.run(`
+        INSERT INTO customer_order_items (id, order_id, sku, product_desc, quantity, picked_quantity, note, item_status, substitute_product_id, action_sequence, entry_sequence, is_carton, units_per_carton, shortage_dismissed, estimated_price, estimated_profit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        number(item.id),
+        number(item.order_id),
+        text(item.sku),
+        text(item.product_desc),
+        number(item.quantity),
+        number(item.picked_quantity),
+        text(item.note),
+        text(item.item_status || "pending"),
+        item.substitute_product_id || null,
+        item.action_sequence === null || item.action_sequence === undefined ? null : number(item.action_sequence),
+        number(item.entry_sequence),
+        item.is_carton ? 1 : 0,
+        number(item.units_per_carton) || 1,
+        item.shortage_dismissed ? 1 : 0,
+        number(item.estimated_price),
+        number(item.estimated_profit),
+      ]);
+    });
+    state.db.run("COMMIT");
+    return true;
+  } catch (error) {
+    try {
+      state.db.run("ROLLBACK");
+    } catch {}
+    console.warn("Postgres order history unavailable, using SQLite", error);
+    return false;
+  }
+}
+
+async function renderOrderHistory() {
   normalizeClosedOrderStatuses();
+  await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
@@ -2776,6 +2861,11 @@ function viewProcessOrder(orderId, triggerButton = null) {
 async function returnOrderToPicking(orderId) {
   if (!confirm("להחזיר את ההזמנה לליקוט לעריכה מחדש?")) return;
   const now = new Date().toISOString();
+  const items = queryRows(`
+    SELECT id, picked_quantity, quantity
+    FROM customer_order_items
+    WHERE order_id = ? AND COALESCE(item_status, 'pending') <> 'return'
+  `, [orderId]);
   state.db.run(`
     UPDATE customer_orders
     SET status = 'מוכן לאיסוף', invoice_printed = 0, picked_by = NULL, picked_at = NULL, shipped_at = NULL, updated_at = ?
@@ -2789,7 +2879,20 @@ async function returnOrderToPicking(orderId) {
         shortage_dismissed = 0
     WHERE order_id = ? AND COALESCE(item_status, 'pending') <> 'return'
   `, [orderId]);
-  await persistDatabase();
+  items.forEach((item) => queuePickingChange({
+    type: "itemPending",
+    itemId: item.id,
+    pickedQuantity: number(item.picked_quantity) > 0 ? number(item.picked_quantity) : number(item.quantity),
+  }));
+  await patchPostgresOrder(orderId, {
+    status: "מוכן לאיסוף",
+    invoice_printed: false,
+    picked_by: null,
+    picked_at: null,
+    shipped_at: null,
+    updated_at: now,
+  });
+  await savePickingNow();
   document.getElementById("process-order-detail").classList.add("hidden");
   renderOrderHistory();
   renderPicking();
@@ -2864,9 +2967,25 @@ function selectAllPickedProcessOrders() {
   renderOrderHistory();
 }
 
+async function patchPostgresOrder(orderId, values) {
+  try {
+    const response = await fetch("/api/postgres/order-patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_id: orderId, values }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok && data.ok !== false, error: data.error || "" };
+  } catch (error) {
+    console.warn("Postgres order patch failed", error);
+    return { ok: false, error: error.message };
+  }
+}
+
 async function markInvoicePrinted(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = 'מוכן למשלוח', updated_at = ? WHERE id = ?", [now, orderId]);
+  await patchPostgresOrder(orderId, { invoice_printed: true, status: "מוכן למשלוח", updated_at: now });
   await persistDatabase();
   renderOrderHistory();
 }
@@ -2874,12 +2993,15 @@ async function markInvoicePrinted(orderId) {
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
+  await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
   await persistDatabase();
   renderOrderHistory();
 }
 
 async function hideProcessOrder(orderId) {
-  state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), orderId]);
+  const now = new Date().toISOString();
+  state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [now, orderId]);
+  await patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
   await persistDatabase();
   renderOrderHistory();
   renderPicking();
