@@ -10,6 +10,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 COPY index.html app.js styles.css server.js README.md ./
 COPY management ./management
+COPY management-postgres ./management-postgres
 
 RUN mkdir -p /data
 VOLUME ["/data"]
