@@ -153,6 +153,50 @@ async function handlePostgresPreview(res) {
   });
 }
 
+function requirePostgres(res) {
+  if (usePostgresPreview) return true;
+  sendJson(res, 200, {
+    ok: false,
+    configured: false,
+    message: "SUPABASE_POSTGRES_URL and SUPABASE_POSTGRES_SERVICE_ROLE_KEY are required",
+  });
+  return false;
+}
+
+async function handlePostgresProducts(req, res) {
+  if (!requirePostgres(res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const query = (url.searchParams.get("q") || "").trim();
+  const supplier = (url.searchParams.get("supplier") || "").trim();
+  const category = (url.searchParams.get("category") || "").trim();
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 500), 1), 1000);
+  const filters = [];
+  if (query) filters.push(`or=(sku.ilike.*${encodeURIComponent(query)}*,description.ilike.*${encodeURIComponent(query)}*)`);
+  if (supplier) filters.push(`supplier=eq.${encodeURIComponent(supplier)}`);
+  if (category) filters.push(`category=eq.${encodeURIComponent(category)}`);
+  const filterString = filters.length ? `&${filters.join("&")}` : "";
+  const rows = await postgresRows(`products?select=sku,description,category,supplier,standard_cost,purchase_price,sale_price,weight&order=description.asc&limit=${limit}${filterString}`);
+  sendJson(res, 200, { ok: true, source: "postgres", rows });
+}
+
+async function handlePostgresProductFilters(res) {
+  if (!requirePostgres(res)) return;
+  const [suppliers, categories] = await Promise.all([
+    postgresRows("products?select=supplier&supplier=not.is.null&order=supplier.asc"),
+    postgresRows("products?select=category&category=not.is.null&order=category.asc"),
+  ]);
+  sendJson(res, 200, {
+    ok: true,
+    source: "postgres",
+    suppliers: uniqueValues(suppliers.map((row) => row.supplier)),
+    categories: uniqueValues(categories.map((row) => row.category)),
+  });
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+}
+
 async function readDatabaseFromSupabase() {
   const response = await fetch(supabaseObjectUrl(), {
     headers: supabaseHeaders(),
@@ -563,6 +607,22 @@ const server = http.createServer((req, res) => {
     handlePostgresPreview(res).catch((error) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres preview failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/products" && req.method === "GET") {
+    handlePostgresProducts(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres products failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/product-filters" && req.method === "GET") {
+    handlePostgresProductFilters(res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres product filters failed" });
     });
     return;
   }

@@ -42,6 +42,7 @@ const CALL_MESSAGE_TEMPLATES = [
 
 const state = {
   db: null,
+  productsSource: "sqlite",
   sort: {},
   dashboardMonths: 6,
   analysisMonths: 6,
@@ -469,7 +470,7 @@ function bindEvents() {
       }
     });
   });
-  ["product-query", "supplier-filter", "category-filter"].forEach((id) => document.getElementById(id).addEventListener("input", renderProducts));
+  ["product-query", "supplier-filter", "category-filter"].forEach((id) => document.getElementById(id).addEventListener("input", () => renderProducts()));
   document.getElementById("recommendation-form").addEventListener("submit", saveRecommendation);
   document.getElementById("recommendation-reset").addEventListener("click", resetRecommendationForm);
   document.getElementById("order-customer-query").addEventListener("input", debounce(renderOrderCustomerResults, 150));
@@ -539,8 +540,8 @@ async function refreshAll() {
   refreshCustomerAnalysisFilters();
   searchCustomers();
   renderCustomerAnalysis();
-  refreshProductFilters();
-  renderProducts();
+  await refreshProductFilters();
+  await renderProducts();
   refreshOrderSelectors();
   renderOrderTables();
   renderPicking();
@@ -1092,12 +1093,32 @@ function renderCustomerAnalysis() {
   ], "analysis", "average_monthly_profit", "desc");
 }
 
-function refreshProductFilters() {
+async function refreshProductFilters() {
+  if (await refreshProductFiltersFromPostgres()) return;
+  state.productsSource = "sqlite";
   fillSelect("supplier-filter", "כל הספקים", queryRows("SELECT DISTINCT supplier AS value FROM products WHERE supplier <> '' ORDER BY supplier"));
   fillSelect("category-filter", "כל הקטגוריות", queryRows("SELECT DISTINCT category AS value FROM products WHERE category <> '' ORDER BY category"));
 }
 
-function renderProducts() {
+async function refreshProductFiltersFromPostgres() {
+  try {
+    const response = await fetch("/api/postgres/product-filters", { cache: "no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    if (!data.ok) return false;
+    state.productsSource = "postgres";
+    fillSelect("supplier-filter", "כל הספקים", (data.suppliers || []).map((value) => ({ value })));
+    fillSelect("category-filter", "כל הקטגוריות", (data.categories || []).map((value) => ({ value })));
+    return true;
+  } catch (error) {
+    console.warn("Postgres product filters unavailable, using SQLite", error);
+    return false;
+  }
+}
+
+async function renderProducts() {
+  if (await renderProductsFromPostgres()) return;
+  state.productsSource = "sqlite";
   const query = `%${document.getElementById("product-query").value.trim()}%`;
   const supplier = document.getElementById("supplier-filter").value;
   const category = document.getElementById("category-filter").value;
@@ -1117,6 +1138,38 @@ function renderProducts() {
     ORDER BY p.description
     LIMIT 500
   `, [query, query, supplier, supplier, category, category]);
+  renderTable("products-table", rows, [
+    { key: "sku", label: 'מק"ט' },
+    { key: "description", label: "תיאור" },
+    { key: "category", label: "קטגוריה" },
+    { key: "supplier", label: "ספק" },
+    { key: "standard_cost", label: "עלות תקן", format: currency2 },
+    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
+    { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "weight", label: "משקל", format: numberDisplay },
+  ], "products", "description", "asc");
+}
+
+async function renderProductsFromPostgres() {
+  try {
+    const params = new URLSearchParams();
+    params.set("q", document.getElementById("product-query").value.trim());
+    params.set("supplier", document.getElementById("supplier-filter").value);
+    params.set("category", document.getElementById("category-filter").value);
+    const response = await fetch(`/api/postgres/products?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    if (!data.ok) return false;
+    state.productsSource = "postgres";
+    renderProductsTable(data.rows || []);
+    return true;
+  } catch (error) {
+    console.warn("Postgres products unavailable, using SQLite", error);
+    return false;
+  }
+}
+
+function renderProductsTable(rows) {
   renderTable("products-table", rows, [
     { key: "sku", label: 'מק"ט' },
     { key: "description", label: "תיאור" },
