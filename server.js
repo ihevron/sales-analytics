@@ -292,6 +292,41 @@ async function handlePostgresCallProfile(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres" });
 }
 
+async function handlePostgresCallProfilesImport(payload, res) {
+  if (!requirePostgres(res)) return;
+  const profiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+  const now = new Date().toISOString();
+  const rows = profiles
+    .map((profile) => {
+      const customerNo = String(profile.customer_no || "").trim();
+      const customerName = String(profile.customer_name || "").trim() || customerNo;
+      const phone = String(profile.phone || profile.phone2 || "").trim();
+      const addressParts = [
+        String(profile.address || "").trim(),
+        String(profile.city || "").trim(),
+      ].filter(Boolean);
+      return {
+        customer_no: customerNo,
+        customer_name: customerName,
+        phone,
+        address: [...new Set(addressParts)].join(", "),
+        call_days: String(profile.call_days || profile.days || "").trim(),
+        source: "calls",
+        updated_at: now,
+      };
+    })
+    .filter((row) => row.customer_no && row.customer_name);
+
+  if (rows.length) {
+    await postgresRest("customer_call_profiles?source=eq.calls", {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    });
+    await postgresUpsert("customer_call_profiles", rows, "customer_no");
+  }
+  sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+}
+
 async function handlePostgresOrderHistory(req, res) {
   if (!requirePostgres(res)) return;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -979,6 +1014,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/postgres/call-profile" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => handlePostgresCallProfile(payload, res));
+    return;
+  }
+
+  if (requestPath === "/api/postgres/call-profiles-import" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresCallProfilesImport(payload, res));
     return;
   }
 

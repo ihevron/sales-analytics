@@ -688,9 +688,11 @@ async function importCallCustomersFile(event) {
   try {
     document.getElementById("calls-import-status").textContent = "קורא קובץ...";
     const sheets = await readWorkbookAllSheets(file);
-    const imported = importCallCustomerSheets(sheets);
+    const importedProfiles = importCallCustomerSheets(sheets);
+    const imported = importedProfiles.length;
+    await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
-    renderCalls();
+    await renderCalls();
     document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות`;
   } catch (error) {
     console.error(error);
@@ -757,7 +759,25 @@ function importCallCustomerSheets(sheets) {
   });
   state.db.run("COMMIT");
   stmt.free();
-  return byCustomer.size;
+  return [...byCustomer.values()].map((customer) => ({
+    ...customer,
+    days: customer.days.filter((day) => CALL_DAYS.includes(day)).join(","),
+  }));
+}
+
+async function importCallCustomerProfilesToPostgres(profiles) {
+  if (!profiles.length) return { ok: true, imported: 0 };
+  const response = await fetch("/api/postgres/call-profiles-import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profiles }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (data.configured === false) return data;
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "ייבוא הלקוחות ל-Supabase נכשל");
+  }
+  return data;
 }
 
 function parseCallCustomerSheet(rows) {
