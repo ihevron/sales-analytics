@@ -546,7 +546,7 @@ async function refreshAll() {
   await renderProducts();
   refreshOrderSelectors();
   renderOrderTables();
-  renderPicking();
+  await renderPicking();
   await renderOrderHistory();
   refreshCallCustomerSelect();
   await renderCalls();
@@ -1794,8 +1794,9 @@ function comparePriorityExportItems(a, b) {
   return number(a.export_sequence ?? a.entry_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? 0);
 }
 
-function renderPicking() {
+async function renderPicking() {
   normalizeClosedOrderStatuses();
+  if (!state.pendingPickingChanges.length && !state.serverSaveInProgress) await syncOrderHistoryFromPostgres();
   document.querySelectorAll("[data-picking-mode]").forEach((button) => button.classList.toggle("active", button.dataset.pickingMode === state.pickingMode));
   document.getElementById("product-picking-controls").classList.toggle("hidden", state.pickingMode !== "product");
   if (state.pickingMode === "product") {
@@ -2277,16 +2278,20 @@ async function confirmPickingProductDialog() {
       SET substitute_product_id = ?, picked_quantity = ?
       WHERE id = ?
     `, [sku, quantity, state.substituteItemId]);
+    queuePickingChange({ type: "itemSubstitute", itemId: state.substituteItemId, substituteProductId: sku, pickedQuantity: quantity });
   }
   if (state.pickingProductMode === "add") {
     const product = firstRow("SELECT sku, description, base_price, standard_cost FROM products WHERE sku = ?", [sku]);
     const details = productDetailsForOrder(state.addPickingCustomerNo || "", sku);
     state.db.run(`
-      INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, estimated_price, estimated_profit)
-      VALUES (?, ?, ?, ?, ?, '', 'pending', ?, ?)
-    `, [state.selectedPickingOrderId, sku, product.description || details.product_desc || sku, quantity, quantity, details.last_price, details.profit_per_unit * quantity]);
+      INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, entry_sequence, is_carton, units_per_carton, estimated_price, estimated_profit)
+      VALUES (?, ?, ?, ?, ?, '', 'pending', ?, 0, 1, ?, ?)
+    `, [state.selectedPickingOrderId, sku, product.description || details.product_desc || sku, quantity, quantity, nextActionSequence(), details.last_price, details.profit_per_unit * quantity]);
+    const itemId = number(scalar("SELECT last_insert_rowid()"));
+    const item = firstRow("SELECT * FROM customer_order_items WHERE id = ?", [itemId]);
+    queuePickingChange({ type: "itemAdd", item });
   }
-  await persistDatabase();
+  await savePickingNow({ silent: true });
   closeSubstituteDialog();
   renderPicking();
 }

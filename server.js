@@ -517,6 +517,37 @@ async function handlePickingChanges(payload, res) {
       if (type === "itemQuantity") {
         db.run("UPDATE customer_order_items SET picked_quantity = ? WHERE id = ?", [numberValue(change.pickedQuantity), numberValue(change.itemId)]);
       }
+      if (type === "itemSubstitute") {
+        db.run("UPDATE customer_order_items SET substitute_product_id = ?, picked_quantity = ? WHERE id = ?", [
+          String(change.substituteProductId || ""),
+          numberValue(change.pickedQuantity),
+          numberValue(change.itemId),
+        ]);
+      }
+      if (type === "itemAdd") {
+        const item = change.item || {};
+        db.run(`
+          INSERT OR REPLACE INTO customer_order_items (id, order_id, sku, product_desc, quantity, picked_quantity, note, item_status, substitute_product_id, action_sequence, entry_sequence, is_carton, units_per_carton, shortage_dismissed, estimated_price, estimated_profit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          numberValue(item.id),
+          numberValue(item.order_id),
+          String(item.sku || ""),
+          String(item.product_desc || ""),
+          numberValue(item.quantity),
+          numberValue(item.picked_quantity),
+          String(item.note || ""),
+          String(item.item_status || "pending"),
+          item.substitute_product_id || null,
+          item.action_sequence === null || item.action_sequence === undefined ? null : numberValue(item.action_sequence),
+          item.entry_sequence === null || item.entry_sequence === undefined ? null : numberValue(item.entry_sequence),
+          numberValue(item.is_carton) ? 1 : 0,
+          numberValue(item.units_per_carton) || 1,
+          numberValue(item.shortage_dismissed) ? 1 : 0,
+          numberValue(item.estimated_price),
+          numberValue(item.estimated_profit),
+        ]);
+      }
       if (type === "itemStatus") {
         db.run(`
           UPDATE customer_order_items
@@ -664,6 +695,16 @@ async function mirrorPickingChangesToPostgres(changes) {
         await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
           picked_quantity: numberValue(change.pickedQuantity),
         });
+      }
+      if (type === "itemSubstitute") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          substitute_product_id: String(change.substituteProductId || ""),
+          picked_quantity: numberValue(change.pickedQuantity),
+        });
+      }
+      if (type === "itemAdd") {
+        const item = change.item || {};
+        await postgresUpsert("customer_order_items", [normalizePostgresOrderItem(item)], "id");
       }
       if (type === "itemStatus") {
         await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
