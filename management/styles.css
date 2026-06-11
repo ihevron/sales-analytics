@@ -444,6 +444,40 @@ textarea { resize: vertical; }
   min-height: 38px;
 }
 
+.invoice-manual-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.8fr) minmax(130px, 0.6fr) minmax(160px, 0.8fr);
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.invoice-product-search {
+  min-width: 0;
+}
+
+.invoice-selected-product {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--primary-soft);
+  color: var(--ink);
+}
+
+.invoice-selected-product strong {
+  font-size: 16px;
+}
+
+.invoice-selected-product span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .order-product-toolbar {
   margin-bottom: 10px;
 }
@@ -1462,6 +1496,7 @@ ul {
   }
   .metrics-grid, .inline-form { grid-template-columns: 1fr; }
   .toolbar, .search-row, .product-toolbar, .form-actions { flex-direction: column; align-items: stretch; }
+  .invoice-manual-grid { grid-template-columns: 1fr; }
   .picking-mode-bar, .product-picking-controls { flex-direction: column; align-items: stretch; }
   .picking-sync-actions {
     justify-content: space-between;

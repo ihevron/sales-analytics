@@ -6,12 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260611priority4" />
+    <link rel="stylesheet" href="./styles.css?v=20260611manualinvoice" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-    <script defer src="./app.js?v=20260611priority4"></script>
+    <script defer src="./app.js?v=20260611manualinvoice"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -339,16 +337,22 @@
             <div class="panel-header">
               <div>
                 <h2>בדיקת חשבונית ספק</h2>
-                <p>טעינת Excel/CSV והשוואה לעלות התקן במוצרים, כולל הנחת שורה והנחה כללית</p>
+                <p>בדיקה ידנית מהירה לפי שם מוצר, מק״ט או ברקוד מול עלות התקן במערכת</p>
               </div>
             </div>
-            <div class="toolbar report-toolbar">
-              <input id="invoice-file" type="file" accept=".xlsx,.xls,.csv,image/*,.pdf" />
-              <label class="compact-label">הנחה כללית %
-                <input id="invoice-global-discount" type="number" inputmode="decimal" min="0" max="100" step="0.01" value="0" />
+            <div class="invoice-manual-grid">
+              <div class="autocomplete-field invoice-product-search">
+                <input id="invoice-product-query" type="search" placeholder="חיפוש לפי שם מוצר / מק״ט / ברקוד" autocomplete="off" />
+                <div id="invoice-product-results" class="autocomplete-list hidden"></div>
+              </div>
+              <label class="compact-label">הנחה %
+                <input id="invoice-manual-discount" type="number" inputmode="decimal" min="0" max="100" step="0.01" value="0" />
               </label>
-              <button class="primary-action" id="invoice-compare-button" type="button">בדיקת חשבונית</button>
+              <label class="compact-label">מחיר בחשבונית
+                <input id="invoice-manual-price" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" />
+              </label>
             </div>
+            <div id="invoice-selected-product" class="invoice-selected-product hidden"></div>
             <p id="invoice-compare-status" class="muted-note"></p>
             <div class="table-wrap"><table id="invoice-compare-table"></table></div>
           </div>

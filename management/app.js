@@ -77,6 +77,7 @@ const state = {
   selectedMissedOrders: new Set(),
   processTab: "pending",
   invoiceRows: [],
+  manualInvoiceProduct: null,
   persistTimer: null,
   serverSaveInProgress: false,
   pendingPickingChanges: [],
@@ -480,15 +481,12 @@ function bindEvents() {
   document.getElementById("compare-products-button").addEventListener("click", renderProductComparison);
   document.getElementById("compare-product-a").addEventListener("change", renderProductComparison);
   document.getElementById("compare-product-b").addEventListener("change", renderProductComparison);
-  document.getElementById("invoice-file").addEventListener("change", () => {
-    state.invoiceRows = [];
-    document.getElementById("invoice-compare-status").textContent = "";
-    document.getElementById("invoice-compare-table").innerHTML = "";
-  });
-  document.getElementById("invoice-global-discount").addEventListener("input", () => {
-    if (state.invoiceRows.length) renderInvoiceComparisonRows();
-  });
-  document.getElementById("invoice-compare-button").addEventListener("click", compareSupplierInvoice);
+  document.getElementById("invoice-product-query").addEventListener("input", debounce(renderInvoiceProductResults, 120));
+  document.getElementById("invoice-product-query").addEventListener("focus", renderInvoiceProductResults);
+  document.getElementById("invoice-product-query").addEventListener("keydown", handleInvoiceProductKeydown);
+  document.getElementById("invoice-product-results").addEventListener("mousedown", handleInvoiceProductResult);
+  document.getElementById("invoice-manual-discount").addEventListener("input", renderManualInvoiceComparison);
+  document.getElementById("invoice-manual-price").addEventListener("input", renderManualInvoiceComparison);
   document.getElementById("returns-report-run").addEventListener("click", renderSupplierReturnsReport);
   ["returns-report-period", "returns-report-supplier"].forEach((id) => document.getElementById(id).addEventListener("change", renderSupplierReturnsReport));
   document.getElementById("recommendation-form").addEventListener("submit", saveRecommendation);
@@ -1413,6 +1411,119 @@ function renderSupplierReturnsReport() {
   ], "returnsSupplier", "return_units", "desc");
 }
 
+function renderInvoiceProductResults() {
+  const queryInput = document.getElementById("invoice-product-query");
+  const results = document.getElementById("invoice-product-results");
+  const rawQuery = queryInput.value.trim();
+  if (!rawQuery) {
+    results.classList.add("hidden");
+    results.innerHTML = "";
+    return;
+  }
+  const query = `%${rawQuery}%`;
+  const rows = queryRows(`
+    SELECT sku, description, category, supplier, standard_cost
+    FROM products
+    WHERE sku LIKE ? OR description LIKE ?
+    ORDER BY
+      CASE WHEN sku = ? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END,
+      description
+    LIMIT 30
+  `, [query, query, rawQuery, `${rawQuery}%`]);
+  results.innerHTML = rows.length ? rows.map((row) => `
+    <button type="button" data-invoice-product="${escapeAttr(row.sku)}">
+      <strong>${escapeHtml(row.description || row.sku)}</strong>
+      <small>${escapeHtml(row.sku)} · ${escapeHtml(row.supplier || "")} · ${currency2(row.standard_cost)}</small>
+    </button>
+  `).join("") : `<div class="autocomplete-empty">לא נמצאו מוצרים</div>`;
+  results.classList.remove("hidden");
+}
+
+function handleInvoiceProductResult(event) {
+  const button = event.target.closest("[data-invoice-product]");
+  if (!button) return;
+  event.preventDefault();
+  selectInvoiceProduct(button.dataset.invoiceProduct);
+}
+
+function handleInvoiceProductKeydown(event) {
+  if (event.key !== "Enter") return;
+  const first = document.querySelector("#invoice-product-results [data-invoice-product]");
+  if (!first) return;
+  event.preventDefault();
+  selectInvoiceProduct(first.dataset.invoiceProduct);
+}
+
+function selectInvoiceProduct(sku) {
+  const product = firstRow(`
+    SELECT sku, description, category, supplier, standard_cost
+    FROM products
+    WHERE sku = ?
+  `, [sku]);
+  if (!product.sku) return;
+  state.manualInvoiceProduct = product;
+  document.getElementById("invoice-product-query").value = `${product.description || product.sku} ${product.sku}`;
+  document.getElementById("invoice-product-results").classList.add("hidden");
+  document.getElementById("invoice-manual-price").value = "";
+  const productBox = document.getElementById("invoice-selected-product");
+  productBox.classList.remove("hidden");
+  productBox.innerHTML = `
+    <strong>${escapeHtml(product.description || product.sku)}</strong>
+    <span>מק״ט: ${escapeHtml(product.sku)}</span>
+    <span>ספק: ${escapeHtml(product.supplier || "-")}</span>
+    <span>עלות תקן: ${currency2(product.standard_cost)}</span>
+  `;
+  document.getElementById("invoice-compare-status").textContent = "הזן מחיר חשבונית כדי לראות פער מול עלות התקן.";
+  document.getElementById("invoice-compare-table").innerHTML = "";
+  const priceInput = document.getElementById("invoice-manual-price");
+  priceInput.focus();
+  priceInput.select();
+}
+
+function renderManualInvoiceComparison() {
+  const product = state.manualInvoiceProduct;
+  const invoicePrice = number(document.getElementById("invoice-manual-price").value);
+  const discount = normalizeDiscountPercent(document.getElementById("invoice-manual-discount").value);
+  if (!product?.sku) {
+    document.getElementById("invoice-compare-status").textContent = "בחר מוצר כדי להתחיל בדיקה.";
+    return;
+  }
+  if (!invoicePrice) {
+    document.getElementById("invoice-compare-status").textContent = "הזן מחיר חשבונית כדי לראות פער מול עלות התקן.";
+    document.getElementById("invoice-compare-table").innerHTML = "";
+    return;
+  }
+  const netPrice = Math.max(0, invoicePrice * (1 - discount));
+  const systemCost = number(product.standard_cost);
+  const gap = netPrice - systemCost;
+  const gapPercent = systemCost === 0 ? 0 : gap / systemCost;
+  const row = {
+    sku: product.sku,
+    description: product.description,
+    supplier: product.supplier,
+    invoice_price: invoicePrice,
+    discount_percent: discount,
+    invoice_net_price: netPrice,
+    system_cost: systemCost,
+    gap,
+    gap_percent: gapPercent,
+    status: Math.abs(gap) < 0.01 ? "תקין" : gap > 0 ? "יקר יותר" : "זול יותר",
+  };
+  document.getElementById("invoice-compare-status").textContent = `מחיר נטו אחרי הנחה: ${currency2(netPrice)}. פער מול המערכת: ${currency2(gap)}.`;
+  renderTable("invoice-compare-table", [row], [
+    { key: "sku", label: 'מק"ט' },
+    { key: "description", label: "מוצר" },
+    { key: "supplier", label: "ספק" },
+    { key: "invoice_price", label: "מחיר חשבונית", format: currency2 },
+    { key: "discount_percent", label: "הנחה", format: percent },
+    { key: "invoice_net_price", label: "מחיר נטו", format: currency2 },
+    { key: "system_cost", label: "עלות תקן", format: currency2 },
+    { key: "gap", label: "פער", format: currency2 },
+    { key: "gap_percent", label: "% פער", format: percent },
+    { key: "status", label: "סטטוס", render: invoiceStatusCell },
+  ], "manualInvoice", "gap", "desc");
+}
+
 const invoiceColumns = {
   sku: ['מק"ט', "מקט", "קוד מוצר", "קוד פריט", "פריט"],
   description: ["תיאור", "תאור", "שם מוצר", "מוצר", "תיאור מוצר"],
@@ -1792,6 +1903,7 @@ function closeAutocompleteOnOutsideClick(event) {
   if (!event.target.closest(".autocomplete-field")) {
     document.getElementById("order-customer-results").classList.add("hidden");
     document.getElementById("order-product-results").classList.add("hidden");
+    document.getElementById("invoice-product-results").classList.add("hidden");
   }
 }
 
