@@ -397,7 +397,12 @@ async function handlePostgresOrderPatch(payload, res) {
   const allowed = new Set(["status", "invoice_printed", "shipped_at", "process_hidden", "picked_by", "picked_at", "updated_at"]);
   const row = {};
   Object.entries(payload.values || {}).forEach(([key, value]) => {
-    if (allowed.has(key)) row[key] = value;
+    if (!allowed.has(key)) return;
+    if (key === "invoice_printed" || key === "process_hidden") {
+      row[key] = value === true || value === 1 || value === "1" ? 1 : 0;
+      return;
+    }
+    row[key] = value;
   });
   row.updated_at = row.updated_at || new Date().toISOString();
   await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
