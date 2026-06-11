@@ -197,17 +197,18 @@ async function handlePostgresProductsImport(payload, res) {
   if (!requirePostgres(res)) return;
   const products = Array.isArray(payload.products) ? payload.products : [];
   const now = new Date().toISOString();
-  const rows = products
+  const rows = [...new Map(products
     .map((product) => {
       const sku = String(product.sku || "").trim();
       const category = String(product.category || "").trim();
+      const standardCost = numberValue(product.standard_cost);
       return {
         sku,
         description: String(product.description || "").trim(),
         family_description: category,
         category,
-        standard_cost: numberValue(product.standard_cost),
-        purchase_price: numberValue(product.purchase_price),
+        standard_cost: standardCost,
+        purchase_price: standardCost,
         sale_price: numberValue(product.sale_price),
         weight: numberValue(product.weight),
         supplier: String(product.supplier || "").trim(),
@@ -216,7 +217,8 @@ async function handlePostgresProductsImport(payload, res) {
         updated_at: now,
       };
     })
-    .filter((row) => row.sku);
+    .filter((row) => row.sku)
+    .map((row) => [row.sku, row])).values()];
 
   if (rows.length) {
     await postgresRest("products?sku=not.is.null", {
@@ -546,7 +548,7 @@ function handleJsonPost(req, res, callback) {
 
   req.on("data", (chunk) => {
     size += chunk.length;
-    if (size > 1024 * 1024) {
+    if (size > 10 * 1024 * 1024) {
       req.destroy();
       return;
     }

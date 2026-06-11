@@ -686,7 +686,6 @@ function importProductRows(rows) {
       description: text(mapped.description),
       category: text(mapped.category),
       standard_cost: number(mapped.standard_cost),
-      purchase_price: number(mapped.purchase_price),
       sale_price: number(mapped.base_price),
       weight: number(mapped.weight),
       supplier: text(mapped.supplier),
@@ -694,12 +693,13 @@ function importProductRows(rows) {
       units_per_carton: number(mapped.units_per_carton) || 1,
       updated_at: now,
     };
+    product.purchase_price = product.standard_cost;
     products.push(product);
     stmt.run([product.sku, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
-  return products;
+  return [...new Map(products.map((product) => [product.sku, product])).values()];
 }
 
 async function importProductsToPostgres(products) {
@@ -1181,14 +1181,10 @@ async function renderProducts() {
   const category = document.getElementById("category-filter").value;
   const rows = queryRows(`
     SELECT p.sku, p.description, p.category, p.supplier, p.standard_cost,
-      COALESCE(s.purchase_price, 0) AS purchase_price,
+      p.standard_cost AS purchase_price,
       p.base_price AS sale_price,
       p.weight
     FROM products p
-    LEFT JOIN (
-      SELECT sku, CASE WHEN SUM(quantity) = 0 THEN 0 ELSE SUM(cost) / SUM(quantity) END AS purchase_price
-      FROM sales_raw GROUP BY sku
-    ) s ON s.sku = p.sku
     WHERE (p.sku LIKE ? OR p.description LIKE ?)
       AND (? = '' OR p.supplier = ?)
       AND (? = '' OR p.category = ?)
