@@ -1431,19 +1431,167 @@ async function compareSupplierInvoice() {
     return;
   }
   const lowerName = file.name.toLowerCase();
-  if (file.type.startsWith("image/") || file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
-    status.textContent = "חשבונית תמונה/PDF דורשת OCR. כדי לשמור על פרטיות, כרגע לא נשלחת חשבונית לשירות חיצוני. ניתן לטעון Excel/CSV, או להגדיר בהמשך OCR מאובטח.";
-    document.getElementById("invoice-compare-table").innerHTML = "";
-    return;
-  }
   try {
-    const rows = await readWorkbook(file);
-    state.invoiceRows = rows.map((row) => mapRow(row, invoiceColumns)).filter((row) => text(row.sku) || text(row.description));
+    status.textContent = "קורא חשבונית...";
+    if (file.type.startsWith("image/")) {
+      const extractedText = await readInvoiceImageText(file);
+      state.invoiceRows = invoiceRowsFromText(extractedText);
+    } else if (file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
+      const extractedText = await readInvoicePdfText(file);
+      state.invoiceRows = invoiceRowsFromText(extractedText);
+    } else {
+      const rows = await readWorkbook(file);
+      state.invoiceRows = rows.map((row) => mapRow(row, invoiceColumns)).filter((row) => text(row.sku) || text(row.description));
+    }
+    if (!state.invoiceRows.length) {
+      status.textContent = "החשבונית נקראה, אבל לא זוהו שורות מוצר. אם זה PDF/תמונה, נסה צילום חד וברור יותר או ודא שמופיעים מק״ט, כמות ומחיר.";
+      document.getElementById("invoice-compare-table").innerHTML = "";
+      return;
+    }
     renderInvoiceComparisonRows();
   } catch (error) {
     console.error(error);
-    status.textContent = "שגיאה בקריאת החשבונית. יש לטעון Excel/CSV עם עמודות מוצר, כמות, מחיר והנחה.";
+    status.textContent = "שגיאה בקריאת החשבונית. ניתן לטעון Excel/CSV, תמונה חדה או PDF קריא.";
   }
+}
+
+async function readInvoiceImageText(file) {
+  if (!window.Tesseract) throw new Error("Tesseract OCR is not loaded");
+  const status = document.getElementById("invoice-compare-status");
+  const result = await Tesseract.recognize(file, "heb+eng", {
+    logger: (message) => {
+      if (message.status === "recognizing text") {
+        status.textContent = `מזהה טקסט בתמונה... ${Math.round((message.progress || 0) * 100)}%`;
+      }
+    },
+  });
+  return result?.data?.text || "";
+}
+
+async function readInvoicePdfText(file) {
+  if (!window.pdfjsLib) throw new Error("PDF reader is not loaded");
+  const status = document.getElementById("invoice-compare-status");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const chunks = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    status.textContent = `קורא PDF... עמוד ${pageNumber} מתוך ${pdf.numPages}`;
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const pageText = pdfTextContentToLines(textContent.items);
+    if (pageText.trim().length > 80) {
+      chunks.push(pageText);
+    } else {
+      chunks.push(await ocrPdfPage(page, pageNumber, pdf.numPages));
+    }
+  }
+  return chunks.join("\n");
+}
+
+function pdfTextContentToLines(items) {
+  const rows = items
+    .map((item) => ({
+      text: item.str,
+      x: item.transform?.[4] || 0,
+      y: Math.round(item.transform?.[5] || 0),
+    }))
+    .filter((item) => text(item.text))
+    .sort((a, b) => b.y - a.y || a.x - b.x);
+  const grouped = [];
+  rows.forEach((item) => {
+    const row = grouped.find((candidate) => Math.abs(candidate.y - item.y) <= 3);
+    if (row) row.items.push(item);
+    else grouped.push({ y: item.y, items: [item] });
+  });
+  return grouped.map((row) => row.items.sort((a, b) => a.x - b.x).map((item) => item.text).join(" ")).join("\n");
+}
+
+async function ocrPdfPage(page, pageNumber, totalPages) {
+  if (!window.Tesseract) throw new Error("Tesseract OCR is not loaded");
+  const status = document.getElementById("invoice-compare-status");
+  const viewport = page.getViewport({ scale: 1.8 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  await page.render({ canvasContext: context, viewport }).promise;
+  const result = await Tesseract.recognize(canvas, "heb+eng", {
+    logger: (message) => {
+      if (message.status === "recognizing text") {
+        status.textContent = `מזהה טקסט ב-PDF... עמוד ${pageNumber}/${totalPages} ${Math.round((message.progress || 0) * 100)}%`;
+      }
+    },
+  });
+  return result?.data?.text || "";
+}
+
+function invoiceRowsFromText(rawText) {
+  const lines = String(rawText || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 4);
+  return lines.map(invoiceLineToRow).filter((row) => text(row.sku) && number(row.quantity) > 0 && (number(row.unit_price) > 0 || number(row.line_total) > 0));
+}
+
+function invoiceLineToRow(line) {
+  const skuMatch = line.match(/(?:מק[״"']?ט|מקט|קוד\s*מוצר|פריט)?\s*([A-Z0-9][A-Z0-9./-]{2,})/i);
+  const numbers = [...line.matchAll(/-?\d+(?:[.,]\d{1,2})?/g)].map((match) => ({
+    raw: match[0],
+    value: quantityNumber(match[0]),
+    index: match.index || 0,
+  }));
+  const moneyNumbers = numbers.filter((item) => item.value >= 0);
+  const quantityCandidate = findInvoiceQuantity(line, numbers, skuMatch?.[1]);
+  const priceInfo = findInvoicePrices(line, moneyNumbers, quantityCandidate);
+  const discountMatch = line.match(/(?:הנחה|discount)\D{0,8}(\d+(?:[.,]\d{1,2})?)\s*%?/i);
+  const description = cleanInvoiceDescription(line, skuMatch?.[1], numbers);
+  return {
+    sku: skuMatch?.[1] || "",
+    description,
+    quantity: quantityCandidate || 1,
+    unit_price: priceInfo.unit_price,
+    discount_percent: discountMatch ? discountMatch[1] : "",
+    discount_amount: "",
+    line_total: priceInfo.line_total,
+  };
+}
+
+function findInvoicePrices(line, numbers, quantity) {
+  const priceLabel = line.match(/(?:מחיר|price)\D{0,10}(\d+(?:[.,]\d{1,2})?)/i);
+  if (priceLabel) return { unit_price: quantityNumber(priceLabel[1]), line_total: "" };
+  const usable = numbers.filter((item) => item.value > 0);
+  if (usable.length >= 3) {
+    const lineTotal = usable[usable.length - 1].value;
+    const unitPrice = usable[usable.length - 2].value;
+    return { unit_price: unitPrice, line_total: lineTotal };
+  }
+  if (usable.length === 2 && quantity > 1 && Math.abs(usable[1].value / quantity - usable[0].value) < 0.05) {
+    return { unit_price: usable[0].value, line_total: usable[1].value };
+  }
+  return { unit_price: usable.length ? usable[usable.length - 1].value : 0, line_total: "" };
+}
+
+function findInvoiceQuantity(line, numbers, sku) {
+  const quantityLabel = line.match(/(?:כמות|qty)\D{0,8}(\d+(?:[.,]\d{1,2})?)/i);
+  if (quantityLabel) return quantityNumber(quantityLabel[1]);
+  const candidates = numbers
+    .filter((item) => item.value > 0 && item.value < 10000 && String(item.raw).replace(/[.,]/g, "").length <= 5)
+    .filter((item) => !sku || !String(sku).includes(String(item.raw).replace(/[.,]/g, "")));
+  return candidates.length > 1 ? candidates[0].value : 1;
+}
+
+function cleanInvoiceDescription(line, sku, numbers) {
+  let description = line;
+  if (sku) description = description.replace(sku, " ");
+  numbers.slice(-3).forEach((item) => {
+    description = description.replace(item.raw, " ");
+  });
+  description = description
+    .replace(/מק[״"']?ט|מקט|קוד\s*מוצר|פריט|כמות|מחיר|הנחה|סהכ|סה"כ/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return description;
 }
 
 function renderInvoiceComparisonRows() {
