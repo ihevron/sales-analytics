@@ -14,9 +14,13 @@
   --neutral: #94a3b8;
   --shadow: 0 2px 12px rgba(0,0,0,0.05);
   --soft-green: #dcfce7;
+  --app-font: "Segoe UI", Arial, sans-serif;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  font-family: var(--app-font);
+}
 
 body {
   margin: 0;
@@ -25,7 +29,7 @@ body {
   background:
     linear-gradient(180deg, rgba(237, 248, 239, 0.82), rgba(244, 247, 245, 0.96) 240px),
     var(--bg);
-  font-family: Arial, "Segoe UI", sans-serif;
+  font-family: var(--app-font);
   direction: rtl;
 }
 
@@ -1146,17 +1150,27 @@ textarea { resize: vertical; }
 }
 
 .call-icon-action.order {
-  min-width: 108px;
+  min-width: 128px;
+  min-height: 40px;
   color: #fff;
   background: linear-gradient(135deg, #2563eb, #3b82f6);
   border-color: transparent;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.32);
   font-weight: 900;
+  transform: translateY(-1px);
 }
 
 .call-icon-action.order span {
   background: rgba(255, 255, 255, 0.22);
   color: #fff;
+  width: 24px;
+  height: 24px;
+  font-size: 17px;
+  border-radius: 8px;
+}
+
+.call-icon-action.order b {
+  font-size: 15px;
 }
 
 .call-icon-action.phone span {

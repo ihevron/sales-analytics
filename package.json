@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check app.js && node --check server.js"
+    "check": "node --check app.js && node --check server.js",
+    "migrate:supabase": "node scripts/migrate-sqlite-to-supabase.js"
   },
   "dependencies": {
     "sql.js": "^1.10.3"
