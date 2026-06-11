@@ -440,22 +440,28 @@ function importProductRows(rows) {
 function renderDashboard() {
   const months = 6;
   const range = dateRange(months);
+  const returnsRange = currentInclusiveRange(months);
   const totals = firstRow(`
     SELECT
       COUNT(DISTINCT customer_no) AS active_customers,
       COALESCE(SUM(sales_amount), 0) AS total_sales,
       COALESCE(SUM(profit), 0) AS total_profit,
-      CASE WHEN COALESCE(SUM(sales_amount), 0) = 0 THEN 0 ELSE SUM(profit) / SUM(sales_amount) END AS profit_percent,
-      CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      CASE WHEN COALESCE(SUM(sales_amount), 0) = 0 THEN 0 ELSE SUM(profit) / SUM(sales_amount) END AS profit_percent
     FROM sales_raw
     WHERE sale_date >= ? AND sale_date < ?
   `, [range.start, range.end]);
+  const returnTotals = firstRow(`
+    SELECT
+      CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+    FROM sales_raw
+    WHERE sale_date >= ? AND sale_date < ?
+  `, [returnsRange.start, returnsRange.end]);
   const cards = [
     ["לקוחות פעילים", integer(totals.active_customers)],
     ["ממוצע מכירות חודשי", currency(number(totals.total_sales) / months)],
     ["ממוצע רווח חודשי", currency(number(totals.total_profit) / months)],
     ["% רווח ממוצע", percent(totals.profit_percent)],
-    ["% חזרות ממוצע", percent(totals.returns_percent)],
+    ["% חזרות ממוצע", percent(returnTotals.returns_percent)],
   ];
   document.getElementById("dashboard-cards").innerHTML = cards.map(([label, value]) => `
     <div class="metric-card"><span>${label}</span><strong>${value}</strong></div>
@@ -490,7 +496,7 @@ function renderDashboard() {
     GROUP BY customer_no
     ORDER BY returns_percent DESC
     LIMIT 10
-  `, [range.start, range.end]), [
+  `, [returnsRange.start, returnsRange.end]), [
     { key: "customer", label: "לקוח" },
     { key: "returns_percent", label: "% חזרות", format: percent },
   ], "topReturns", "returns_percent", "desc");
@@ -575,20 +581,44 @@ function searchCustomers() {
 
 function selectCustomer(customerNo) {
   state.selectedCustomer = customerNo;
-  const customer = firstRow("SELECT * FROM customer_profitability_summary WHERE customer_no = ?", [customerNo]);
+  const months = state.customerSearchMonths || 6;
+  const range = dateRange(months);
+  const returnsRange = currentInclusiveRange(months);
+  const customer = firstRow("SELECT customer_no, MAX(customer_name) AS customer_name FROM sales_raw WHERE customer_no = ? GROUP BY customer_no", [customerNo]);
   document.getElementById("customer-card").classList.remove("hidden");
   document.getElementById("customer-card-title").textContent = customer.customer_name || "כרטיס לקוח";
   document.getElementById("customer-card-subtitle").textContent = `מס' לקוח: ${customer.customer_no || ""}`;
   renderTable("customer-products-table", queryRows(`
     SELECT
-      COALESCE(product_desc, sku) AS product,
-      quantity,
-      CASE WHEN sales_amount = 0 THEN 0 ELSE profit / sales_amount END AS profit_percent,
-      CASE WHEN purchase_units = 0 THEN 0 ELSE ABS(return_units / purchase_units) END AS returns_percent
-    FROM customer_product_summary
-    WHERE customer_no = ?
+      COALESCE(NULLIF(TRIM(product_desc), ''), NULLIF(TRIM(sku), ''), 'ללא מוצר') AS product,
+      COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN quantity ELSE 0 END), 0) AS quantity,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN sales_amount ELSE 0 END), 0) = 0 THEN 0
+        ELSE
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN profit ELSE 0 END) /
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN sales_amount ELSE 0 END)
+      END AS profit_percent,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN purchase_units ELSE 0 END), 0) = 0 THEN 0
+        ELSE ABS(
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN return_units ELSE 0 END) /
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN purchase_units ELSE 0 END)
+        )
+      END AS returns_percent
+    FROM sales_raw
+    WHERE customer_no = ? AND sale_date >= ? AND sale_date < ?
+    GROUP BY COALESCE(NULLIF(TRIM(sku), ''), NULLIF(TRIM(product_desc), ''), 'ללא מוצר')
     ORDER BY quantity DESC
-  `, [customerNo]), [
+  `, [
+    range.start, range.end,
+    range.start, range.end,
+    range.start, range.end,
+    range.start, range.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    customerNo, returnsRange.start, returnsRange.end,
+  ]), [
     { key: "product", label: "מוצר" },
     { key: "quantity", label: "כמות", format: numberDisplay },
     { key: "profit_percent", label: "% רווח", format: percent },
@@ -603,20 +633,42 @@ function selectCustomer(customerNo) {
 function renderCustomerAnalysis() {
   const months = state.analysisMonths;
   const range = dateRange(months);
+  const returnsRange = currentInclusiveRange(months);
   const query = `%${document.getElementById("analysis-query").value.trim()}%`;
   const rows = queryRows(`
     SELECT
       customer_name,
-      COALESCE(SUM(sales_amount), 0) / ? AS average_monthly_sales,
-      COALESCE(SUM(profit), 0) / ? AS average_monthly_profit,
-      CASE WHEN COALESCE(SUM(sales_amount), 0) = 0 THEN 0 ELSE SUM(profit) / SUM(sales_amount) END AS profit_percent,
-      CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN sales_amount ELSE 0 END), 0) / ? AS average_monthly_sales,
+      COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN profit ELSE 0 END), 0) / ? AS average_monthly_profit,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN sales_amount ELSE 0 END), 0) = 0 THEN 0
+        ELSE
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN profit ELSE 0 END) /
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN sales_amount ELSE 0 END)
+      END AS profit_percent,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN purchase_units ELSE 0 END), 0) = 0 THEN 0
+        ELSE ABS(
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN return_units ELSE 0 END) /
+          SUM(CASE WHEN sale_date >= ? AND sale_date < ? THEN purchase_units ELSE 0 END)
+        )
+      END AS returns_percent
     FROM sales_raw
     WHERE sale_date >= ? AND sale_date < ? AND customer_name LIKE ?
     GROUP BY customer_no
     ORDER BY average_monthly_profit DESC
     LIMIT 500
-  `, [months, months, range.start, range.end, query]);
+  `, [
+    range.start, range.end, months,
+    range.start, range.end, months,
+    range.start, range.end,
+    range.start, range.end,
+    range.start, range.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end, query,
+  ]);
   renderTable("analysis-table", rows, [
     { key: "customer_name", label: "שם לקוח" },
     { key: "average_monthly_sales", label: "ממוצע מכירות חודשי", format: currency },
@@ -686,6 +738,7 @@ function renderSupplierAnalysis() {
   const months = state.supplierMonths;
   const weeks = months * 4.345;
   const range = dateRange(months);
+  const returnsRange = currentInclusiveRange(months);
   const rawQuery = document.getElementById("supplier-analysis-query").value.trim();
   const query = `%${rawQuery}%`;
   const supplier = document.getElementById("supplier-analysis-filter").value;
@@ -702,11 +755,22 @@ function renderSupplierAnalysis() {
     const rows = queryRows(`
       SELECT
         COALESCE(NULLIF(TRIM(s.supplier), ''), NULLIF(TRIM(p.supplier), ''), 'ללא ספק') AS supplier,
-        COALESCE(SUM(s.sales_amount), 0) / ? AS average_monthly_sales,
-        COALESCE(SUM(s.profit), 0) / ? AS average_monthly_profit,
-        CASE WHEN COALESCE(SUM(s.sales_amount), 0) = 0 THEN 0 ELSE SUM(s.profit) / SUM(s.sales_amount) END AS profit_percent,
-        CASE WHEN COALESCE(SUM(s.purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(s.return_units) / SUM(s.purchase_units)) END AS returns_percent,
-        COALESCE(SUM(s.quantity), 0) / ? AS average_weekly_quantity
+        COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END), 0) / ? AS average_monthly_sales,
+        COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.profit ELSE 0 END), 0) / ? AS average_monthly_profit,
+        CASE
+          WHEN COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END), 0) = 0 THEN 0
+          ELSE
+            SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.profit ELSE 0 END) /
+            SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END)
+        END AS profit_percent,
+        CASE
+          WHEN COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.purchase_units ELSE 0 END), 0) = 0 THEN 0
+          ELSE ABS(
+            SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.return_units ELSE 0 END) /
+            SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.purchase_units ELSE 0 END)
+          )
+        END AS returns_percent,
+        COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.quantity ELSE 0 END), 0) / ? AS average_weekly_quantity
       FROM sales_raw s
       LEFT JOIN products p ON p.sku = s.sku
       WHERE s.sale_date >= ? AND s.sale_date < ?
@@ -714,7 +778,18 @@ function renderSupplierAnalysis() {
       GROUP BY COALESCE(NULLIF(TRIM(s.supplier), ''), NULLIF(TRIM(p.supplier), ''), 'ללא ספק')
       ORDER BY average_monthly_profit DESC
       LIMIT 500
-    `, [months, months, weeks, range.start, range.end, query]);
+    `, [
+      range.start, range.end, months,
+      range.start, range.end, months,
+      range.start, range.end,
+      range.start, range.end,
+      range.start, range.end,
+      returnsRange.start, returnsRange.end,
+      returnsRange.start, returnsRange.end,
+      returnsRange.start, returnsRange.end,
+      range.start, range.end, weeks,
+      returnsRange.start, returnsRange.end, query,
+    ]);
     renderTable("supplier-analysis-table", rows, baseColumns, "supplierAnalysis", "average_monthly_profit", "desc");
     return;
   }
@@ -723,11 +798,22 @@ function renderSupplierAnalysis() {
     SELECT
       COALESCE(NULLIF(TRIM(s.supplier), ''), NULLIF(TRIM(p.supplier), ''), 'ללא ספק') AS supplier,
       COALESCE(NULLIF(TRIM(s.product_desc), ''), NULLIF(TRIM(p.description), ''), NULLIF(TRIM(s.sku), ''), 'ללא מוצר') AS product,
-      COALESCE(SUM(s.sales_amount), 0) / ? AS average_monthly_sales,
-      COALESCE(SUM(s.profit), 0) / ? AS average_monthly_profit,
-      CASE WHEN COALESCE(SUM(s.sales_amount), 0) = 0 THEN 0 ELSE SUM(s.profit) / SUM(s.sales_amount) END AS profit_percent,
-      CASE WHEN COALESCE(SUM(s.purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(s.return_units) / SUM(s.purchase_units)) END AS returns_percent,
-      COALESCE(SUM(s.quantity), 0) / ? AS average_weekly_quantity
+      COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END), 0) / ? AS average_monthly_sales,
+      COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.profit ELSE 0 END), 0) / ? AS average_monthly_profit,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END), 0) = 0 THEN 0
+        ELSE
+          SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.profit ELSE 0 END) /
+          SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.sales_amount ELSE 0 END)
+      END AS profit_percent,
+      CASE
+        WHEN COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.purchase_units ELSE 0 END), 0) = 0 THEN 0
+        ELSE ABS(
+          SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.return_units ELSE 0 END) /
+          SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.purchase_units ELSE 0 END)
+        )
+      END AS returns_percent,
+      COALESCE(SUM(CASE WHEN s.sale_date >= ? AND s.sale_date < ? THEN s.quantity ELSE 0 END), 0) / ? AS average_weekly_quantity
     FROM sales_raw s
     LEFT JOIN products p ON p.sku = s.sku
     WHERE s.sale_date >= ? AND s.sale_date < ?
@@ -738,7 +824,18 @@ function renderSupplierAnalysis() {
       COALESCE(NULLIF(TRIM(s.sku), ''), NULLIF(TRIM(s.product_desc), ''), NULLIF(TRIM(p.description), ''), 'ללא מוצר')
     ORDER BY average_monthly_profit DESC
     LIMIT 500
-  `, [months, months, weeks, range.start, range.end, supplier, query]);
+  `, [
+    range.start, range.end, months,
+    range.start, range.end, months,
+    range.start, range.end,
+    range.start, range.end,
+    range.start, range.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    returnsRange.start, returnsRange.end,
+    range.start, range.end, weeks,
+    returnsRange.start, returnsRange.end, supplier, query,
+  ]);
 
   renderTable("supplier-analysis-table", rows, [
     baseColumns[0],
@@ -922,6 +1019,12 @@ function toSqlDate(date) {
 function dateRange(months) {
   const end = firstDayOfCurrentMonth();
   const start = addMonths(end, -months);
+  return { start: toSqlDate(start), end: toSqlDate(end) };
+}
+
+function currentInclusiveRange(months) {
+  const start = addMonths(firstDayOfCurrentMonth(), -months);
+  const end = addMonths(firstDayOfCurrentMonth(), 1);
   return { start: toSqlDate(start), end: toSqlDate(end) };
 }
 
