@@ -43,6 +43,8 @@ const CALL_MESSAGE_TEMPLATES = [
 const state = {
   db: null,
   productsSource: "sqlite",
+  callsSource: "sqlite",
+  postgresCallRows: [],
   sort: {},
   dashboardMonths: 6,
   analysisMonths: 6,
@@ -547,7 +549,7 @@ async function refreshAll() {
   renderPicking();
   renderOrderHistory();
   refreshCallCustomerSelect();
-  renderCalls();
+  await renderCalls();
   renderRecommendations();
 }
 
@@ -2926,6 +2928,39 @@ function upsertCallStatus(customerNo, customerName, day, status, options = {}) {
   `, [callDate, customerNo, customerName, status, options.callAgainTime || null, options.whatsappSentAt ?? existing.whatsapp_sent_at ?? null, options.manualOrderId ?? existing.manual_order_id ?? null, options.notes || "", now]);
 }
 
+async function upsertPostgresCallStatus(row, status, options = {}) {
+  const existing = state.postgresCallRows.find((item) => String(item.customer_no) === String(row.customer_no)) || {};
+  const payload = {
+    call_date: callDateForDay(state.callsDay, options.referenceDate ? new Date(options.referenceDate) : new Date()),
+    customer_no: row.customer_no,
+    customer_name: row.customer_name,
+    status,
+    call_again_time: options.callAgainTime ?? existing.call_again_time ?? null,
+    whatsapp_sent_at: options.whatsappSentAt ?? existing.whatsapp_sent_at ?? null,
+    manual_order_id: options.manualOrderId ?? existing.manual_order_id ?? null,
+    notes: options.notes ?? existing.notes ?? "",
+  };
+  const response = await fetch("/api/postgres/call-status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || "שמירת השיחה ל-Postgres נכשלה");
+  const updated = {
+    ...existing,
+    ...payload,
+    ...(data.row || {}),
+    call_again_time: payload.call_again_time || "",
+    whatsapp_sent_at: payload.whatsapp_sent_at || "",
+    notes: payload.notes || "",
+  };
+  const index = state.postgresCallRows.findIndex((item) => String(item.customer_no) === String(row.customer_no));
+  if (index >= 0) state.postgresCallRows[index] = updated;
+  else state.postgresCallRows.push(updated);
+  return updated;
+}
+
 function markCustomerOrderedCall(customerNo, customerName, orderDateValue) {
   if (!customerNo) return;
   const day = nearestCallDayForOrder(customerNo, orderDateValue);
@@ -2977,11 +3012,14 @@ async function saveCall(event) {
   if (state.selectedCustomer) renderCustomerCalls(state.selectedCustomer.customer_no);
 }
 
-function renderCalls() {
+async function renderCalls() {
   renderCallTemplateEditor();
   renderCallDayTabs();
   const day = state.callsDay;
   const callDate = callDateForDay(day);
+  if (await renderCallsFromPostgres(day, callDate)) return;
+  state.callsSource = "sqlite";
+  state.postgresCallRows = [];
   const rows = queryRows(`
     SELECT
       p.customer_no,
@@ -3014,6 +3052,27 @@ function renderCalls() {
       customer_name
     LIMIT 800
   `, [callDate, `%,${day},%`]);
+  renderCallRows(rows);
+}
+
+async function renderCallsFromPostgres(day, callDate) {
+  try {
+    const params = new URLSearchParams({ day, call_date: callDate });
+    const response = await fetch(`/api/postgres/calls?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const data = await response.json();
+    if (!data.ok) return false;
+    state.callsSource = "postgres";
+    state.postgresCallRows = data.rows || [];
+    renderCallRows(state.postgresCallRows);
+    return true;
+  } catch (error) {
+    console.warn("Postgres calls unavailable, using SQLite", error);
+    return false;
+  }
+}
+
+function renderCallRows(rows) {
   const visibleRows = state.callsFilter ? rows.filter((row) => normalizeCallStatus(row.status) === state.callsFilter) : rows;
   renderCallSummary(rows);
   const table = document.getElementById("calls-table");
@@ -3107,14 +3166,16 @@ function renderCallBulkActions(rows = []) {
 async function openBulkWhatsapp(rows) {
   const templateId = document.getElementById("bulk-call-template")?.value;
   const template = state.callTemplates.find((item) => item.id === templateId) || state.callTemplates[0] || CALL_MESSAGE_TEMPLATES[0];
+  const sentTasks = [];
   rows.forEach((row, index) => {
     const phone = String(row.phone || row.phone2 || "").replace(/\D/g, "").replace(/^0/, "972");
     if (!phone) return;
     const url = whatsappUrl(phone, templateText(template.text, row));
     setTimeout(() => window.open(url, "_blank", "noopener"), index * 180);
-    markWhatsappSent(row.customer_no, false);
+    sentTasks.push(markWhatsappSent(row.customer_no, false));
   });
-  await persistDatabase();
+  await Promise.all(sentTasks);
+  if (state.callsSource !== "postgres") await persistDatabase();
   state.selectedCallCustomers.clear();
   renderCalls();
 }
@@ -3282,6 +3343,10 @@ function whatsappUrl(phone, message) {
 }
 
 function callCustomerByNo(customerNo) {
+  if (state.callsSource === "postgres") {
+    const row = state.postgresCallRows.find((item) => String(item.customer_no) === String(customerNo));
+    if (row) return row;
+  }
   return firstRow(`
     SELECT customer_no, customer_name FROM customer_profitability_summary WHERE customer_no = ?
     UNION
@@ -3331,6 +3396,15 @@ function updateCallWhatsappLink(customerNo) {
 async function markWhatsappSent(customerNo, shouldPersist = true) {
   const row = callCustomerByNo(customerNo);
   if (!row.customer_no) return;
+  if (state.callsSource === "postgres") {
+    await upsertPostgresCallStatus(row, normalizeCallStatus(row.status), {
+      callAgainTime: row.call_again_time,
+      notes: row.notes || "",
+      whatsappSentAt: new Date().toISOString(),
+    });
+    if (shouldPersist) renderCalls();
+    return;
+  }
   const existing = firstRow("SELECT status, call_again_time, notes FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDateForDay(state.callsDay)]);
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, normalizeCallStatus(existing.status), {
     callAgainTime: existing.call_again_time,
@@ -3347,6 +3421,19 @@ async function saveCallProfile(customerNo) {
   const phone = text(document.getElementById(`call-edit-phone-${customerNo}`)?.value);
   const address = text(document.getElementById(`call-edit-address-${customerNo}`)?.value);
   const days = normalizeCallDays(document.getElementById(`call-edit-days-${customerNo}`)?.value || state.callsDay);
+  if (state.callsSource === "postgres") {
+    const response = await fetch("/api/postgres/call-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customer_no: customerNo, phone, address, call_days: days.join(",") }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) return alert(data.error || "שמירת הלקוח נכשלה");
+    const row = state.postgresCallRows.find((item) => String(item.customer_no) === String(customerNo));
+    if (row) Object.assign(row, { phone, address, days: days.join(",") });
+    renderCalls();
+    return;
+  }
   const profile = firstRow("SELECT * FROM customer_call_profiles WHERE customer_no = ? AND COALESCE(source, 'calls') = 'calls'", [customerNo]);
   if (!profile.customer_no) return;
   state.db.run(`
@@ -3364,7 +3451,9 @@ async function updateCustomerCallFromButton(button) {
   const row = callCustomerByNo(customerNo);
   if (!row.customer_no) return;
   const callDate = callDateForDay(state.callsDay);
-  const existingCall = firstRow("SELECT status, manual_order_id FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
+  const existingCall = state.callsSource === "postgres"
+    ? (state.postgresCallRows.find((item) => String(item.customer_no) === String(customerNo)) || {})
+    : firstRow("SELECT status, manual_order_id FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDate]);
   const options = {};
   if (status === "call_again") {
     const timeInput = document.getElementById(`call-time-${customerNo}`);
@@ -3384,7 +3473,11 @@ async function updateCustomerCallFromButton(button) {
   } else if (number(existingCall.manual_order_id)) {
     options.manualOrderId = number(existingCall.manual_order_id);
   }
-  upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, options);
+  if (state.callsSource === "postgres") {
+    await upsertPostgresCallStatus(row, status, options);
+  } else {
+    upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, options);
+  }
   if (manualOrder?.orderId) {
     const delta = {
       order: {
@@ -3413,7 +3506,7 @@ async function updateCustomerCallFromButton(button) {
     const serverResult = await writeOrderDelta(delta);
     await writeBrowserDatabase(state.db.export());
     if (serverResult.ok) await reloadDatabaseFromServer();
-  } else {
+  } else if (state.callsSource !== "postgres") {
     await persistDatabase();
   }
   renderCalls();
@@ -3425,6 +3518,12 @@ async function updateCustomerCallTime(input) {
   const customerNo = input.dataset.callTime;
   const row = callCustomerByNo(customerNo);
   if (!row.customer_no || !input.value) return;
+  if (state.callsSource === "postgres") {
+    await upsertPostgresCallStatus(row, "call_again", { callAgainTime: input.value });
+    renderCalls();
+    if (state.selectedCustomer) renderCustomerCalls(state.selectedCustomer.customer_no);
+    return;
+  }
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, "call_again", { callAgainTime: input.value });
   await persistDatabase();
   renderCalls();
@@ -3434,6 +3533,11 @@ async function updateCustomerCallTime(input) {
 async function saveExpandedCallNote(customerNo) {
   const row = callCustomerByNo(customerNo);
   const note = document.getElementById(`call-note-${customerNo}`)?.value || "";
+  if (state.callsSource === "postgres") {
+    await upsertPostgresCallStatus(row, normalizeCallStatus(row.status), { callAgainTime: row.call_again_time, notes: note });
+    renderCalls();
+    return;
+  }
   const existing = firstRow("SELECT status, call_again_time FROM customer_calls WHERE customer_no = ? AND call_date = ?", [customerNo, callDateForDay(state.callsDay)]);
   upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, normalizeCallStatus(existing.status), { callAgainTime: existing.call_again_time, notes: note });
   await persistDatabase();

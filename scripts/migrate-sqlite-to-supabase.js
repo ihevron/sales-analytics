@@ -32,6 +32,9 @@ const columnAliases = {
   products: {
     sale_price: "base_price",
   },
+  customer_call_profiles: {
+    call_days: "days",
+  },
   sales_raw: {
     amount: "sales_amount",
   },

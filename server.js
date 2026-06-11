@@ -193,6 +193,105 @@ async function handlePostgresProductFilters(res) {
   });
 }
 
+async function handlePostgresCalls(req, res) {
+  if (!requirePostgres(res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const day = (url.searchParams.get("day") || "").trim();
+  const callDate = (url.searchParams.get("call_date") || "").trim();
+  if (!day || !callDate) {
+    sendJson(res, 400, { ok: false, error: "day and call_date are required" });
+    return;
+  }
+
+  const encodedDay = encodeURIComponent(day);
+  const [profiles, calls] = await Promise.all([
+    postgresRows(`customer_call_profiles?select=customer_no,customer_name,phone,address,call_days,source&source=eq.calls&call_days=ilike.*${encodedDay}*&order=customer_name.asc&limit=1000`),
+    postgresRows(`customer_calls?select=id,call_date,customer_no,customer_name,status,call_again_time,whatsapp_sent_at,manual_order_id,notes,updated_at&call_date=eq.${encodeURIComponent(callDate)}&limit=2000`),
+  ]);
+  const callByCustomer = new Map(calls.map((row) => [String(row.customer_no), row]));
+  const priority = { pending: 1, call_again: 2, no_answer: 3, no_need: 4, ordered: 5 };
+  const rows = profiles.map((profile) => {
+    const call = callByCustomer.get(String(profile.customer_no)) || {};
+    const status = call.status || "pending";
+    return {
+      customer_no: profile.customer_no,
+      customer_name: profile.customer_name || call.customer_name || "",
+      contact: "",
+      phone: profile.phone || "",
+      phone2: "",
+      city: "",
+      address: profile.address || "",
+      days: profile.call_days || "",
+      status,
+      call_again_time: call.call_again_time || "",
+      whatsapp_sent_at: call.whatsapp_sent_at || "",
+      manual_order_id: call.manual_order_id || null,
+      notes: call.notes || "",
+      updated_at: call.updated_at || "",
+    };
+  }).sort((a, b) => {
+    const statusCompare = (priority[a.status] || 6) - (priority[b.status] || 6);
+    if (statusCompare) return statusCompare;
+    return String(a.customer_name || "").localeCompare(String(b.customer_name || ""), "he");
+  });
+  sendJson(res, 200, { ok: true, source: "postgres", rows });
+}
+
+async function handlePostgresCallStatus(payload, res) {
+  if (!requirePostgres(res)) return;
+  const now = new Date().toISOString();
+  const row = {
+    call_date: String(payload.call_date || ""),
+    customer_no: String(payload.customer_no || ""),
+    customer_name: String(payload.customer_name || ""),
+    status: String(payload.status || "pending"),
+    call_again_time: payload.call_again_time || null,
+    whatsapp_sent_at: payload.whatsapp_sent_at || null,
+    manual_order_id: payload.manual_order_id || null,
+    notes: payload.notes || "",
+    updated_at: now,
+  };
+  if (!row.call_date || !row.customer_no) {
+    sendJson(res, 400, { ok: false, error: "call_date and customer_no are required" });
+    return;
+  }
+  const response = await postgresRest("customer_calls?on_conflict=call_date,customer_no", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(row),
+  });
+  const rows = await response.json();
+  sendJson(res, 200, { ok: true, source: "postgres", row: rows[0] || row });
+}
+
+async function handlePostgresCallProfile(payload, res) {
+  if (!requirePostgres(res)) return;
+  const customerNo = String(payload.customer_no || "");
+  if (!customerNo) {
+    sendJson(res, 400, { ok: false, error: "customer_no is required" });
+    return;
+  }
+  const row = {
+    phone: payload.phone || "",
+    address: payload.address || "",
+    call_days: payload.call_days || "",
+    source: "calls",
+    updated_at: new Date().toISOString(),
+  };
+  await postgresRest(`customer_call_profiles?customer_no=eq.${encodeURIComponent(customerNo)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(row),
+  });
+  sendJson(res, 200, { ok: true, source: "postgres" });
+}
+
 function uniqueValues(values) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
 }
@@ -624,6 +723,24 @@ const server = http.createServer((req, res) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres product filters failed" });
     });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/calls" && req.method === "GET") {
+    handlePostgresCalls(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres calls failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/call-status" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresCallStatus(payload, res));
+    return;
+  }
+
+  if (requestPath === "/api/postgres/call-profile" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresCallProfile(payload, res));
     return;
   }
 
