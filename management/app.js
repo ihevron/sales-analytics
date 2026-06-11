@@ -579,7 +579,10 @@ async function importFile(event, type) {
     setStatus("קורא קובץ");
     const rows = await readWorkbook(file);
     if (type === "sales") importSalesRows(rows);
-    if (type === "products") importProductRows(rows);
+    if (type === "products") {
+      const importedProducts = importProductRows(rows);
+      await importProductsToPostgres(importedProducts);
+    }
     rebuildSummaryTables();
     const persisted = await persistDatabase();
     await refreshAll();
@@ -656,6 +659,7 @@ function importSalesRows(rows) {
 
 function importProductRows(rows) {
   const now = new Date().toISOString();
+  const products = [];
   const stmt = state.db.prepare(`
     INSERT INTO products
     (sku, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
@@ -676,10 +680,40 @@ function importProductRows(rows) {
   rows.forEach((row) => {
     const mapped = mapRow(row, productColumns);
     if (!mapped.sku) return;
-    stmt.run([text(mapped.sku), text(mapped.description), text(mapped.category), number(mapped.standard_cost), number(mapped.base_price), number(mapped.weight), text(mapped.supplier), pickOrderValue(row, mapped), number(mapped.units_per_carton) || 1, now]);
+    const product = {
+      sku: text(mapped.sku),
+      description: text(mapped.description),
+      category: text(mapped.category),
+      standard_cost: number(mapped.standard_cost),
+      purchase_price: number(mapped.purchase_price),
+      sale_price: number(mapped.base_price),
+      weight: number(mapped.weight),
+      supplier: text(mapped.supplier),
+      pick_order: pickOrderValue(row, mapped),
+      units_per_carton: number(mapped.units_per_carton) || 1,
+      updated_at: now,
+    };
+    products.push(product);
+    stmt.run([product.sku, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
+  return products;
+}
+
+async function importProductsToPostgres(products) {
+  if (!products.length) return { ok: true, imported: 0 };
+  const response = await fetch("/api/postgres/products-import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ products }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (data.configured === false) return data;
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "ייבוא המוצרים ל-Supabase נכשל");
+  }
+  return data;
 }
 
 async function importCallCustomersFile(event) {

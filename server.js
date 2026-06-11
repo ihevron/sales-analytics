@@ -193,6 +193,43 @@ async function handlePostgresProductFilters(res) {
   });
 }
 
+async function handlePostgresProductsImport(payload, res) {
+  if (!requirePostgres(res)) return;
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  const now = new Date().toISOString();
+  const rows = products
+    .map((product) => {
+      const sku = String(product.sku || "").trim();
+      const category = String(product.category || "").trim();
+      return {
+        sku,
+        description: String(product.description || "").trim(),
+        family_description: category,
+        category,
+        standard_cost: numberValue(product.standard_cost),
+        purchase_price: numberValue(product.purchase_price),
+        sale_price: numberValue(product.sale_price),
+        weight: numberValue(product.weight),
+        supplier: String(product.supplier || "").trim(),
+        pick_order: numberValue(product.pick_order) || 999999,
+        units_per_carton: numberValue(product.units_per_carton) || 1,
+        updated_at: now,
+      };
+    })
+    .filter((row) => row.sku);
+
+  if (rows.length) {
+    await postgresRest("products?sku=not.is.null", {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    });
+    for (let index = 0; index < rows.length; index += 500) {
+      await postgresUpsert("products", rows.slice(index, index + 500), "sku");
+    }
+  }
+  sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+}
+
 async function handlePostgresCalls(req, res) {
   if (!requirePostgres(res)) return;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -996,6 +1033,11 @@ const server = http.createServer((req, res) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres product filters failed" });
     });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/products-import" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresProductsImport(payload, res));
     return;
   }
 
