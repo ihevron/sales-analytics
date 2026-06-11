@@ -3442,18 +3442,27 @@ function savedOrderExportItems(orderId) {
 function exportSelectedPriorityOrders() {
   const orderIds = [...state.selectedProcessOrders];
   if (!orderIds.length) return alert("יש לבחור לפחות הזמנה אחת ליצוא.");
-  const orders = [];
+  const rows = [];
+  let sequence = 1;
   orderIds.forEach((orderId) => {
     const order = firstRow("SELECT * FROM customer_orders WHERE id = ?", [orderId]);
     if (!order.id) return;
-    orders.push({ customer: order, items: savedOrderExportItems(orderId) });
+    rows.push([sequence, order.customer_no, "", "", 1]);
+    sequence += 1;
+    priorityExportItems(savedOrderExportItems(orderId)).forEach((item) => {
+      const sku = String(item.export_sku || item.sku || "").trim();
+      const quantity = exportQuantityForPriority(item);
+      const isReturnMarker = sku === "999" || item.is_return_marker;
+      if (!sku || (!isReturnMarker && quantity === 0)) return;
+      rows.push([sequence, "", sku, isReturnMarker ? 0 : quantity, 2]);
+      sequence += 1;
+    });
   });
-  const rows = priorityFlatRowsForOrders(orders);
   if (!rows.length) return alert("לא נמצאו הזמנות ליצוא.");
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   XLSX.utils.book_append_sheet(workbook, sheet, "Priority");
-  XLSX.writeFile(workbook, `priority-selected-${toSqlDate(new Date())}.xlsx`);
+  XLSX.writeFile(workbook, `priority-v2-selected-${toSqlDate(new Date())}.xlsx`);
 }
 
 function selectAllPickedProcessOrders() {
