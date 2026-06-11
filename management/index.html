@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260611productspg" />
+    <link rel="stylesheet" href="./styles.css?v=20260611reports" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260611productspg"></script>
+    <script defer src="./app.js?v=20260611reports"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -29,6 +29,7 @@
           <button class="nav-item" data-screen="order-history"><span>🚚</span>הזמנות בתהליך</button>
           <button class="nav-item" data-screen="calls"><span>📞</span>ניהול שיחות</button>
           <button class="nav-item" data-screen="products"><span>📦</span>מוצרים</button>
+          <button class="nav-item" data-screen="reports"><span>📊</span>דוחות</button>
           <button class="nav-item" data-screen="recommendations"><span>📊</span>המלצות מכירה</button>
         </nav>
         <div class="import-panel">
@@ -71,6 +72,26 @@
             <div class="panel">
               <div class="panel-header"><h2>10 הלקוחות עם אחוז החזרות הגבוה ביותר</h2></div>
               <div class="table-wrap"><table id="top-returns-table"></table></div>
+            </div>
+          </div>
+          <div class="two-column">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>10 הלקוחות שהכי ירדו במכירות</h2>
+                  <p>3 חודשים מלאים אחרונים מול 3 החודשים שקדמו להם</p>
+                </div>
+              </div>
+              <div class="table-wrap"><table id="customer-decline-table"></table></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>10 המוצרים שהכי ירדו במכירות</h2>
+                  <p>3 חודשים מלאים אחרונים מול 3 החודשים שקדמו להם</p>
+                </div>
+              </div>
+              <div class="table-wrap"><table id="product-decline-table"></table></div>
             </div>
           </div>
         </section>
@@ -288,12 +309,66 @@
 
         <section id="products" class="screen">
           <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>השוואת מוצרים</h2>
+                <p>השוואה לפי מחירים, ספק, קטגוריה ואחוז חזרות ב-6 חודשים מלאים אחרונים</p>
+              </div>
+            </div>
+            <div class="toolbar compare-toolbar">
+              <select id="compare-product-a"><option value="">מוצר ראשון</option></select>
+              <select id="compare-product-b"><option value="">מוצר שני</option></select>
+              <button class="primary-action" id="compare-products-button" type="button">השווה</button>
+            </div>
+            <div class="table-wrap"><table id="product-compare-table"></table></div>
+          </div>
+          <div class="panel">
             <div class="toolbar product-toolbar">
               <input id="product-query" type="search" placeholder="חיפוש מוצר או מק״ט" />
               <select id="supplier-filter"><option value="">כל הספקים</option></select>
               <select id="category-filter"><option value="">כל הקטגוריות</option></select>
             </div>
             <div class="table-wrap"><table id="products-table"></table></div>
+          </div>
+        </section>
+
+        <section id="reports" class="screen">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>בדיקת חשבונית ספק</h2>
+                <p>טעינת Excel/CSV והשוואה לעלות התקן במוצרים, כולל הנחת שורה והנחה כללית</p>
+              </div>
+            </div>
+            <div class="toolbar report-toolbar">
+              <input id="invoice-file" type="file" accept=".xlsx,.xls,.csv,image/*,.pdf" />
+              <label class="compact-label">הנחה כללית %
+                <input id="invoice-global-discount" type="number" inputmode="decimal" min="0" max="100" step="0.01" value="0" />
+              </label>
+              <button class="primary-action" id="invoice-compare-button" type="button">בדיקת חשבונית</button>
+            </div>
+            <p id="invoice-compare-status" class="muted-note"></p>
+            <div class="table-wrap"><table id="invoice-compare-table"></table></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>חזרות לפי ספק</h2>
+                <p>דוח ראשון: כמה יחידות חזרו מכל מוצר לפי ספק ותקופה</p>
+              </div>
+            </div>
+            <div class="toolbar report-toolbar">
+              <select id="returns-report-period">
+                <option value="1">חודש אחרון</option>
+                <option value="3">3 חודשים</option>
+                <option value="6">6 חודשים</option>
+                <option value="12">12 חודשים</option>
+              </select>
+              <select id="returns-report-supplier"><option value="">כל הספקים</option></select>
+              <button class="primary-action" id="returns-report-run" type="button">הצג דוח</button>
+            </div>
+            <div class="table-wrap"><table id="returns-supplier-table"></table></div>
           </div>
         </section>
 
@@ -317,7 +392,7 @@
         <button class="nav-item" data-screen="calls"><span>📞</span><small>שיחות</small></button>
         <button class="nav-item" data-screen="order-create"><span>📦</span><small>הזמנות</small></button>
         <button class="nav-item" data-screen="picking"><span>👷🏻‍♂️</span><small>ליקוט</small></button>
-        <button class="nav-item" data-screen="customer-search"><span>📊</span><small>דוחות</small></button>
+        <button class="nav-item" data-screen="reports"><span>📊</span><small>דוחות</small></button>
         <button class="nav-item" data-screen="order-history"><span>🚚</span><small>בתהליך</small></button>
       </nav>
     </div>

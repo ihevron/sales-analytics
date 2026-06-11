@@ -76,6 +76,7 @@ const state = {
   selectedProcessOrders: new Set(),
   selectedMissedOrders: new Set(),
   processTab: "pending",
+  invoiceRows: [],
   persistTimer: null,
   serverSaveInProgress: false,
   pendingPickingChanges: [],
@@ -92,6 +93,7 @@ const screens = {
   "order-history": { title: "הזמנות בתהליך", subtitle: "שלבי יצוא, חשבונית ומשלוח" },
   calls: { title: "ניהול שיחות", subtitle: "תיעוד שיחות לקוח" },
   products: { title: "מוצרים", subtitle: "חיפוש וסינון מוצרים" },
+  reports: { title: "דוחות", subtitle: "בדיקת חשבוניות ודוחות תפעוליים" },
   recommendations: { title: "המלצות מכירה", subtitle: "ניהול המלצות פעילות לכרטיס לקוח" },
 };
 
@@ -104,6 +106,7 @@ const screenIcons = {
   "order-history": "🚚",
   calls: "📞",
   products: "📦",
+  reports: "📊",
   recommendations: "📊",
 };
 
@@ -474,6 +477,20 @@ function bindEvents() {
     });
   });
   ["product-query", "supplier-filter", "category-filter"].forEach((id) => document.getElementById(id).addEventListener("input", () => renderProducts()));
+  document.getElementById("compare-products-button").addEventListener("click", renderProductComparison);
+  document.getElementById("compare-product-a").addEventListener("change", renderProductComparison);
+  document.getElementById("compare-product-b").addEventListener("change", renderProductComparison);
+  document.getElementById("invoice-file").addEventListener("change", () => {
+    state.invoiceRows = [];
+    document.getElementById("invoice-compare-status").textContent = "";
+    document.getElementById("invoice-compare-table").innerHTML = "";
+  });
+  document.getElementById("invoice-global-discount").addEventListener("input", () => {
+    if (state.invoiceRows.length) renderInvoiceComparisonRows();
+  });
+  document.getElementById("invoice-compare-button").addEventListener("click", compareSupplierInvoice);
+  document.getElementById("returns-report-run").addEventListener("click", renderSupplierReturnsReport);
+  ["returns-report-period", "returns-report-supplier"].forEach((id) => document.getElementById(id).addEventListener("change", renderSupplierReturnsReport));
   document.getElementById("recommendation-form").addEventListener("submit", saveRecommendation);
   document.getElementById("recommendation-reset").addEventListener("click", resetRecommendationForm);
   document.getElementById("order-customer-query").addEventListener("input", debounce(renderOrderCustomerResults, 150));
@@ -551,7 +568,10 @@ async function refreshAll() {
   searchCustomers();
   renderCustomerAnalysis();
   await refreshProductFilters();
+  refreshProductCompareOptions();
+  refreshReportFilters();
   await renderProducts();
+  renderSupplierReturnsReport();
   refreshOrderSelectors();
   renderOrderTables();
   await renderPicking();
@@ -573,6 +593,10 @@ function showScreen(id) {
   if (id === "customer-search") searchCustomers();
   if (id === "customer-analysis") renderCustomerAnalysis();
   if (id === "products") renderProducts();
+  if (id === "reports") {
+    refreshReportFilters();
+    renderSupplierReturnsReport();
+  }
   if (id === "order-create") refreshOrderSelectors();
   if (id === "picking") renderPicking();
   if (id === "order-history") renderOrderHistory();
@@ -941,6 +965,20 @@ function renderDashboard() {
     { key: "customer", label: "לקוח" },
     { key: "returns_percent", label: "% חזרות", render: returnPercentCell },
   ], "topReturns", "returns_percent", "desc");
+
+  renderTable("customer-decline-table", declineRows("customer"), [
+    { key: "label", label: "לקוח" },
+    { key: "previous_sales", label: "3 חודשים קודמים", format: currency },
+    { key: "current_sales", label: "3 חודשים אחרונים", format: currency },
+    { key: "change_amount", label: "ירידה", format: currency },
+  ], "customerDecline", "change_amount", "asc");
+
+  renderTable("product-decline-table", declineRows("product"), [
+    { key: "label", label: "מוצר" },
+    { key: "previous_sales", label: "3 חודשים קודמים", format: currency },
+    { key: "current_sales", label: "3 חודשים אחרונים", format: currency },
+    { key: "change_amount", label: "ירידה", format: currency },
+  ], "productDecline", "change_amount", "asc");
 }
 
 function monthlyRows() {
@@ -957,6 +995,43 @@ function monthlyRows() {
     GROUP BY SUBSTR(sale_date, 1, 7)
     ORDER BY month DESC
   `, [range.start, range.end]);
+}
+
+function declineRows(type) {
+  const current = dateRange(3);
+  const currentStart = new Date(`${current.start}T00:00:00`);
+  const previousStart = new Date(currentStart.getFullYear(), currentStart.getMonth() - 3, 1);
+  const previous = { start: toSqlDate(previousStart), end: current.start };
+  const groupKey = type === "product" ? "s.sku" : "s.customer_no";
+  const labelExpr = type === "product"
+    ? "COALESCE(MAX(NULLIF(s.product_desc, '')), MAX(p.description), s.sku)"
+    : "MAX(s.customer_name)";
+  return queryRows(`
+    WITH previous_period AS (
+      SELECT ${groupKey} AS entity_key, ${labelExpr} AS label, COALESCE(SUM(s.sales_amount), 0) AS previous_sales
+      FROM sales_raw s
+      LEFT JOIN products p ON p.sku = s.sku
+      WHERE s.sale_date >= ? AND s.sale_date < ?
+      GROUP BY ${groupKey}
+    ),
+    current_period AS (
+      SELECT ${groupKey} AS entity_key, COALESCE(SUM(s.sales_amount), 0) AS current_sales
+      FROM sales_raw s
+      LEFT JOIN products p ON p.sku = s.sku
+      WHERE s.sale_date >= ? AND s.sale_date < ?
+      GROUP BY ${groupKey}
+    )
+    SELECT previous_period.label,
+      previous_period.previous_sales,
+      COALESCE(current_period.current_sales, 0) AS current_sales,
+      COALESCE(current_period.current_sales, 0) - previous_period.previous_sales AS change_amount
+    FROM previous_period
+    LEFT JOIN current_period ON current_period.entity_key = previous_period.entity_key
+    WHERE previous_period.previous_sales > 0
+      AND COALESCE(current_period.current_sales, 0) < previous_period.previous_sales
+    ORDER BY change_amount ASC
+    LIMIT 10
+  `, [previous.start, previous.end, current.start, current.end]);
 }
 
 function searchCustomers() {
@@ -1240,6 +1315,209 @@ function renderProductsTable(rows) {
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "weight", label: "משקל", format: numberDisplay },
   ], "products", "description", "asc");
+}
+
+function refreshProductCompareOptions() {
+  const rows = queryRows(`
+    SELECT sku AS value, COALESCE(NULLIF(description, ''), sku) AS label
+    FROM products
+    WHERE sku <> ''
+    ORDER BY label
+    LIMIT 2000
+  `);
+  fillSelect("compare-product-a", "מוצר ראשון", rows, "value", "label");
+  fillSelect("compare-product-b", "מוצר שני", rows, "value", "label");
+}
+
+function productComparisonRow(sku) {
+  if (!sku) return null;
+  const range = dateRange(6);
+  const product = firstRow(`
+    SELECT sku, description, category, supplier, standard_cost,
+      standard_cost AS purchase_price,
+      base_price AS sale_price,
+      weight
+    FROM products
+    WHERE sku = ?
+  `, [sku]);
+  if (!product.sku) return null;
+  const sales = firstRow(`
+    SELECT
+      CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent,
+      COALESCE(SUM(quantity), 0) AS quantity,
+      COALESCE(SUM(sales_amount), 0) AS sales_amount
+    FROM sales_raw
+    WHERE sku = ? AND sale_date >= ? AND sale_date < ?
+  `, [sku, range.start, range.end]);
+  return { ...product, ...sales };
+}
+
+function renderProductComparison() {
+  const rows = [
+    productComparisonRow(document.getElementById("compare-product-a").value),
+    productComparisonRow(document.getElementById("compare-product-b").value),
+  ].filter(Boolean);
+  renderTable("product-compare-table", rows, [
+    { key: "sku", label: 'מק"ט' },
+    { key: "description", label: "תיאור" },
+    { key: "category", label: "קטגוריה" },
+    { key: "supplier", label: "ספק" },
+    { key: "standard_cost", label: "עלות תקן", format: currency2 },
+    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
+    { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "returns_percent", label: "% חזרות", render: returnPercentCell },
+    { key: "quantity", label: "כמות 6 חודשים", format: numberDisplay },
+    { key: "sales_amount", label: "מכירות 6 חודשים", format: currency },
+  ], "productCompare", "description", "asc");
+}
+
+function refreshReportFilters() {
+  const suppliers = queryRows(`
+    SELECT DISTINCT COALESCE(NULLIF(s.supplier, ''), p.supplier, '') AS value
+    FROM sales_raw s
+    LEFT JOIN products p ON p.sku = s.sku
+    WHERE COALESCE(NULLIF(s.supplier, ''), p.supplier, '') <> ''
+    ORDER BY value
+  `);
+  fillSelect("returns-report-supplier", "כל הספקים", suppliers);
+}
+
+function renderSupplierReturnsReport() {
+  const months = number(document.getElementById("returns-report-period").value) || 1;
+  const supplier = document.getElementById("returns-report-supplier").value;
+  const range = dateRange(months);
+  const rows = queryRows(`
+    SELECT
+      s.sku,
+      COALESCE(MAX(NULLIF(s.product_desc, '')), MAX(p.description), s.sku) AS product,
+      COALESCE(NULLIF(s.supplier, ''), p.supplier, '') AS supplier,
+      ABS(COALESCE(SUM(s.return_units), 0)) AS return_units,
+      COALESCE(SUM(s.purchase_units), 0) AS purchase_units,
+      CASE WHEN COALESCE(SUM(s.purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(s.return_units) / SUM(s.purchase_units)) END AS returns_percent
+    FROM sales_raw s
+    LEFT JOIN products p ON p.sku = s.sku
+    WHERE s.sale_date >= ? AND s.sale_date < ?
+      AND (? = '' OR COALESCE(NULLIF(s.supplier, ''), p.supplier, '') = ?)
+    GROUP BY s.sku, COALESCE(NULLIF(s.supplier, ''), p.supplier, '')
+    HAVING ABS(COALESCE(SUM(s.return_units), 0)) > 0
+    ORDER BY return_units DESC
+    LIMIT 500
+  `, [range.start, range.end, supplier, supplier]);
+  renderTable("returns-supplier-table", rows, [
+    { key: "supplier", label: "ספק" },
+    { key: "sku", label: 'מק"ט' },
+    { key: "product", label: "מוצר" },
+    { key: "return_units", label: "יחידות חזרות", format: numberDisplay },
+    { key: "purchase_units", label: "יחידות קניה", format: numberDisplay },
+    { key: "returns_percent", label: "% חזרות", render: returnPercentCell },
+  ], "returnsSupplier", "return_units", "desc");
+}
+
+const invoiceColumns = {
+  sku: ['מק"ט', "מקט", "קוד מוצר", "קוד פריט", "פריט"],
+  description: ["תיאור", "תאור", "שם מוצר", "מוצר", "תיאור מוצר"],
+  quantity: ["כמות", "כמות יחידות"],
+  unit_price: ["מחיר", "מחיר יחידה", "מחיר קניה", "מחיר לפני הנחה", "עלות"],
+  discount_percent: ["הנחה", "% הנחה", "אחוז הנחה", "הנחת שורה"],
+  discount_amount: ["סכום הנחה", "הנחה בשח", "הנחה שורה"],
+  line_total: ['סה"כ', "סהכ", "סכום שורה", "סכום"],
+};
+
+async function compareSupplierInvoice() {
+  const file = document.getElementById("invoice-file").files[0];
+  const status = document.getElementById("invoice-compare-status");
+  if (!file) {
+    alert("יש לבחור קובץ חשבונית");
+    return;
+  }
+  const lowerName = file.name.toLowerCase();
+  if (file.type.startsWith("image/") || file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
+    status.textContent = "חשבונית תמונה/PDF דורשת OCR. כדי לשמור על פרטיות, כרגע לא נשלחת חשבונית לשירות חיצוני. ניתן לטעון Excel/CSV, או להגדיר בהמשך OCR מאובטח.";
+    document.getElementById("invoice-compare-table").innerHTML = "";
+    return;
+  }
+  try {
+    const rows = await readWorkbook(file);
+    state.invoiceRows = rows.map((row) => mapRow(row, invoiceColumns)).filter((row) => text(row.sku) || text(row.description));
+    renderInvoiceComparisonRows();
+  } catch (error) {
+    console.error(error);
+    status.textContent = "שגיאה בקריאת החשבונית. יש לטעון Excel/CSV עם עמודות מוצר, כמות, מחיר והנחה.";
+  }
+}
+
+function renderInvoiceComparisonRows() {
+  const globalDiscount = Math.max(0, number(document.getElementById("invoice-global-discount").value)) / 100;
+  const rows = state.invoiceRows.map((row) => invoiceComparisonRow(row, globalDiscount));
+  const gaps = rows.filter((row) => row.status === "פער").length;
+  const missing = rows.filter((row) => row.status === "לא נמצא").length;
+  document.getElementById("invoice-compare-status").textContent = `נבדקו ${rows.length} שורות. נמצאו ${gaps} פערים ו-${missing} מוצרים שלא זוהו.`;
+  renderTable("invoice-compare-table", rows, [
+    { key: "sku", label: 'מק"ט' },
+    { key: "description", label: "מוצר בחשבונית" },
+    { key: "system_description", label: "מוצר במערכת" },
+    { key: "quantity", label: "כמות", format: numberDisplay },
+    { key: "invoice_unit_price", label: "מחיר חשבונית נטו", format: currency2 },
+    { key: "system_cost", label: "עלות תקן במערכת", format: currency2 },
+    { key: "gap", label: "פער ליחידה", format: currency2 },
+    { key: "gap_percent", label: "% פער", format: percent },
+    { key: "status", label: "סטטוס", render: invoiceStatusCell },
+  ], "invoiceCompare", "gap", "desc");
+}
+
+function invoiceComparisonRow(row, globalDiscount) {
+  const sku = text(row.sku);
+  const quantity = Math.max(1, number(row.quantity));
+  const product = findInvoiceProduct(sku, text(row.description));
+  const rawUnitPrice = invoiceUnitPrice(row, quantity);
+  const lineDiscountPercent = normalizeDiscountPercent(row.discount_percent);
+  const lineDiscountAmountPerUnit = number(row.discount_amount) / quantity;
+  const invoiceUnitPrice = Math.max(0, (rawUnitPrice * (1 - lineDiscountPercent) - lineDiscountAmountPerUnit) * (1 - globalDiscount));
+  const systemCost = number(product.standard_cost);
+  const gap = product.sku ? invoiceUnitPrice - systemCost : 0;
+  const gapPercent = systemCost === 0 ? 0 : gap / systemCost;
+  const status = product.sku ? (Math.abs(gap) >= 0.01 ? "פער" : "תקין") : "לא נמצא";
+  return {
+    sku: sku || product.sku,
+    description: text(row.description),
+    system_description: product.description || "",
+    quantity,
+    invoice_unit_price: invoiceUnitPrice,
+    system_cost: systemCost,
+    gap,
+    gap_percent: gapPercent,
+    status,
+  };
+}
+
+function findInvoiceProduct(sku, description) {
+  if (sku) {
+    const bySku = firstRow("SELECT sku, description, standard_cost FROM products WHERE sku = ?", [sku]);
+    if (bySku.sku) return bySku;
+  }
+  if (description) {
+    const byDescription = firstRow("SELECT sku, description, standard_cost FROM products WHERE description LIKE ? ORDER BY LENGTH(description) LIMIT 1", [`%${description}%`]);
+    if (byDescription.sku) return byDescription;
+  }
+  return {};
+}
+
+function invoiceUnitPrice(row, quantity) {
+  const unitPrice = number(row.unit_price);
+  if (unitPrice > 0) return unitPrice;
+  const lineTotal = number(row.line_total);
+  return lineTotal > 0 ? lineTotal / quantity : 0;
+}
+
+function normalizeDiscountPercent(value) {
+  const discount = number(value);
+  if (discount <= 0) return 0;
+  return discount > 1 ? discount / 100 : discount;
+}
+
+function invoiceStatusCell(row) {
+  const cls = row.status === "תקין" ? "return-low" : row.status === "פער" ? "return-mid" : "return-high";
+  return `<span class="${cls}">${escapeHtml(row.status)}</span>`;
 }
 
 function startOrderFromCustomerCard() {

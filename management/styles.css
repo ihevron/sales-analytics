@@ -419,6 +419,31 @@ textarea { resize: vertical; }
 .product-toolbar input { flex: 2; }
 .product-toolbar select { flex: 1; }
 
+.compare-toolbar,
+.report-toolbar {
+  flex-wrap: wrap;
+}
+
+.compare-toolbar select,
+.report-toolbar select,
+.report-toolbar input[type="file"] {
+  min-width: 220px;
+  flex: 1;
+}
+
+.compact-label {
+  display: grid;
+  gap: 5px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.compact-label input {
+  min-height: 38px;
+}
+
 .order-product-toolbar {
   margin-bottom: 10px;
 }
