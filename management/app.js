@@ -2242,15 +2242,7 @@ function priorityFlatRowsForOrders(orders) {
 }
 
 function priorityRowsForCustomer(customer, items) {
-  const rows = [[customer.customer_no, customer.customer_name], ["הערות להזמנה", customer.notes || ""], [], ["קוד מוצר", "כמות", "שם מוצר", "הערת מוצר"]];
-  const exportItems = priorityExportItems(items);
-  exportItems.filter((item) => exportQuantityForPriority(item) !== 0).forEach((item) => rows.push([
-    item.export_sku || item.sku,
-    exportQuantityForPriority(item),
-    item.export_product_desc || item.product_desc,
-    item.note || "",
-  ]));
-  return rows;
+  return priorityFlatRowsForOrders([{ customer, items }]);
 }
 
 function priorityExportItems(items) {

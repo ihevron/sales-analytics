@@ -966,10 +966,9 @@ function handleStatic(req, res) {
       return;
     }
     const ext = path.extname(filePath);
-    const immutable = ext === ".js" || ext === ".css";
     send(res, 200, data, {
       "Content-Type": types[ext] || "application/octet-stream",
-      "Cache-Control": immutable ? "public, max-age=300" : "no-store",
+      "Cache-Control": "no-store",
     });
   });
 }
