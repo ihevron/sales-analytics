@@ -14,6 +14,9 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseBucket = process.env.SUPABASE_BUCKET || "sales-analytics";
 const supabaseDbObject = process.env.SUPABASE_DB_OBJECT || "sales-analytics.sqlite";
 const useSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey);
+const postgresPreviewUrl = normalizeSupabaseUrl(process.env.SUPABASE_POSTGRES_URL || "");
+const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
+const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
 
@@ -71,6 +74,83 @@ function supabaseHeaders(extra = {}) {
   }
 
   return headers;
+}
+
+function postgresHeaders(extra = {}) {
+  return {
+    apikey: postgresPreviewKey,
+    Authorization: `Bearer ${postgresPreviewKey}`,
+    ...extra,
+  };
+}
+
+async function postgresRest(pathname, options = {}) {
+  const response = await fetch(`${postgresPreviewUrl}/rest/v1/${pathname}`, {
+    ...options,
+    headers: postgresHeaders(options.headers || {}),
+  });
+  if (!response.ok) {
+    throw new Error(`postgres preview failed: ${response.status} ${await response.text()}`);
+  }
+  return response;
+}
+
+async function postgresCount(table) {
+  const response = await postgresRest(`${table}?select=*`, {
+    method: "HEAD",
+    headers: { Prefer: "count=exact" },
+  });
+  const range = response.headers.get("content-range") || "*/0";
+  return Number(range.split("/").pop()) || 0;
+}
+
+async function postgresRows(pathname) {
+  const response = await postgresRest(pathname);
+  return response.json();
+}
+
+async function handlePostgresPreview(res) {
+  if (!usePostgresPreview) {
+    sendJson(res, 200, {
+      ok: false,
+      configured: false,
+      message: "SUPABASE_POSTGRES_URL and SUPABASE_POSTGRES_SERVICE_ROLE_KEY are required",
+    });
+    return;
+  }
+
+  const [counts, recentOrders, recentCalls, topProducts] = await Promise.all([
+    Promise.all([
+      postgresCount("products"),
+      postgresCount("sales_raw"),
+      postgresCount("customer_orders"),
+      postgresCount("customer_order_items"),
+      postgresCount("customer_calls"),
+      postgresCount("customer_call_profiles"),
+      postgresCount("sales_recommendations"),
+    ]),
+    postgresRows("customer_orders?select=id,order_date,customer_no,customer_name,status,estimated_total&order=id.desc&limit=8"),
+    postgresRows("customer_calls?select=id,call_date,customer_no,customer_name,status,call_again_time&order=id.desc&limit=8"),
+    postgresRows("products?select=sku,description,category,supplier,sale_price,pick_order&order=description.asc&limit=8"),
+  ]);
+
+  sendJson(res, 200, {
+    ok: true,
+    configured: true,
+    projectHost: new URL(postgresPreviewUrl).host,
+    counts: {
+      products: counts[0],
+      sales_raw: counts[1],
+      customer_orders: counts[2],
+      customer_order_items: counts[3],
+      customer_calls: counts[4],
+      customer_call_profiles: counts[5],
+      sales_recommendations: counts[6],
+    },
+    recentOrders,
+    recentCalls,
+    topProducts,
+  });
 }
 
 async function readDatabaseFromSupabase() {
@@ -442,6 +522,10 @@ const server = http.createServer((req, res) => {
       ok: true,
       storage: useSupabase ? "supabase" : "disk",
       pickingChangesApi: true,
+      postgresPreview: {
+        configured: usePostgresPreview,
+        host: postgresPreviewUrl ? new URL(postgresPreviewUrl).host : "",
+      },
       supabase: {
         configured: useSupabase,
         host: supabaseUrl ? new URL(supabaseUrl).host : "",
@@ -472,6 +556,14 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/order-delta" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrderDelta(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/postgres-preview" && req.method === "GET") {
+    handlePostgresPreview(res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres preview failed" });
+    });
     return;
   }
 

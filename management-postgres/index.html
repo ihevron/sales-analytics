@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>בדיקת Supabase Postgres</title>
+    <link rel="icon" type="image/png" href="../management/wa-logo.png" />
+    <link rel="stylesheet" href="../management/styles.css?v=20260611tahoma" />
+    <script defer src="./preview.js?v=20260611"></script>
+  </head>
+  <body>
+    <main class="content postgres-preview-page">
+      <header class="topbar">
+        <span class="screen-icon" aria-hidden="true">🧪</span>
+        <div>
+          <h1>בדיקת Supabase Postgres</h1>
+          <p>תצוגת קריאה בלבד מהטבלאות החדשות, בלי לשנות את האפליקציה הרגילה.</p>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="panel-header split">
+          <div>
+            <h2>מצב חיבור</h2>
+            <p id="preview-status" class="status-text">טוען נתונים מ-Postgres</p>
+          </div>
+          <a class="secondary-action" href="../management/">חזרה לאפליקציה הרגילה</a>
+        </div>
+        <div class="metrics-grid" id="postgres-counts"></div>
+      </section>
+
+      <section class="two-column">
+        <div class="panel">
+          <div class="panel-header"><h2>הזמנות אחרונות</h2></div>
+          <div class="table-wrap"><table id="postgres-orders"></table></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>שיחות אחרונות</h2></div>
+          <div class="table-wrap"><table id="postgres-calls"></table></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header"><h2>מוצרים לדוגמה</h2></div>
+        <div class="table-wrap"><table id="postgres-products"></table></div>
+      </section>
+    </main>
+  </body>
+</html>
