@@ -4,6 +4,7 @@ const ORDER_STATUSES = ["מוכן לאיסוף", "נאסף", "מוכן למשל�
 const CALL_DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי"];
 const CALL_DAY_INDEX = { "ראשון": 0, "שני": 1, "שלישי": 2, "רביעי": 3, "חמישי": 4 };
 const CALL_DAY_SHORT = { "ראשון": "א׳", "שני": "ב׳", "שלישי": "ג׳", "רביעי": "ד׳", "חמישי": "ה׳" };
+const WEEKLY_CALL_RESET_HOUR = 23;
 const CALL_DAY_ALIASES = {
   "א": "ראשון",
   "א׳": "ראשון",
@@ -83,6 +84,7 @@ const state = {
   pendingPickingChanges: [],
   callTemplates: loadCallTemplates(),
   selectedCallTemplateId: "weekly",
+  callResetTimer: null,
 };
 
 const screens = {
@@ -174,6 +176,8 @@ async function init() {
   if (!state.db) return;
   bindEvents();
   await refreshAll();
+  await runScheduledCallReset({ refresh: true });
+  startWeeklyCallResetTimer();
   setStatus("מוכן לעבודה");
 }
 
@@ -446,6 +450,7 @@ function bindEvents() {
   document.getElementById("import-call-customers").addEventListener("click", () => document.getElementById("calls-customers-file").click());
   document.getElementById("calls-customers-file").addEventListener("change", importCallCustomersFile);
   document.getElementById("toggle-call-templates").addEventListener("click", toggleCallTemplateEditor);
+  document.getElementById("reset-call-day").addEventListener("click", resetCurrentCallDay);
   document.getElementById("call-template-select").addEventListener("change", () => loadSelectedCallTemplate(document.getElementById("call-template-select").value));
   document.getElementById("save-call-template").addEventListener("click", saveCurrentCallTemplate);
   document.getElementById("new-call-template").addEventListener("click", startNewCallTemplate);
@@ -3708,8 +3713,30 @@ function refreshCallCustomerSelect() {
   document.getElementById("call-customer-select").innerHTML = `<option value="">בחירת לקוח</option>` + rows.map((row) => `<option value="${escapeAttr(row.customer_no)}">${escapeHtml(row.customer_name)} - ${escapeHtml(row.customer_no)}</option>`).join("");
 }
 
-function callDateForDay(day, referenceDate = new Date()) {
+function callWeekReferenceDate(referenceDate = new Date()) {
   const date = new Date(referenceDate);
+  if (date.getDay() > 4 || (date.getDay() === 4 && date.getHours() >= WEEKLY_CALL_RESET_HOUR)) {
+    date.setDate(date.getDate() + 7);
+  }
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function callWeekKey(referenceDate = new Date()) {
+  const weekReference = callWeekReferenceDate(referenceDate);
+  const sunday = new Date(weekReference);
+  sunday.setHours(0, 0, 0, 0);
+  sunday.setDate(sunday.getDate() - sunday.getDay());
+  return toSqlDate(sunday);
+}
+
+function callWeekDates(referenceDate = new Date()) {
+  const weekReference = callWeekReferenceDate(referenceDate);
+  return CALL_DAYS.map((day) => callDateForDay(day, weekReference));
+}
+
+function callDateForDay(day, referenceDate = new Date()) {
+  const date = callWeekReferenceDate(referenceDate);
   date.setHours(0, 0, 0, 0);
   date.setDate(date.getDate() - date.getDay() + (CALL_DAY_INDEX[day] ?? 0));
   return toSqlDate(date);
@@ -3881,6 +3908,70 @@ async function renderCallsFromPostgres(day, callDate) {
     return true;
   } catch (error) {
     console.warn("Postgres calls unavailable, using SQLite", error);
+    return false;
+  }
+}
+
+async function resetCurrentCallDay() {
+  const callDate = callDateForDay(state.callsDay);
+  if (!confirm(`לאפס את כל הלקוחות של יום ${state.callsDay} לסטטוס בטיפול?`)) return;
+  const result = await resetCallDates([callDate]);
+  if (state.callsSource === "postgres" && !result.server) {
+    alert("האיפוס בענן נכשל. יש לבדוק חיבור לשרת ולנסות שוב.");
+    return;
+  }
+  state.expandedCallCustomerNo = "";
+  state.selectedCallCustomers.clear();
+  document.getElementById("calls-import-status").textContent = "הסטטוסים של היום אופסו";
+  await renderCalls();
+}
+
+function startWeeklyCallResetTimer() {
+  if (state.callResetTimer) clearInterval(state.callResetTimer);
+  state.callResetTimer = setInterval(() => {
+    runScheduledCallReset({ refresh: true }).catch((error) => console.warn("Scheduled call reset failed", error));
+  }, 60 * 1000);
+}
+
+async function runScheduledCallReset(options = {}) {
+  const now = new Date();
+  if (now.getDay() < 4 || (now.getDay() === 4 && now.getHours() < WEEKLY_CALL_RESET_HOUR)) return false;
+  const resetKey = `weeklyCallReset:${callWeekKey(now)}`;
+  if (localStorage.getItem(resetKey)) return false;
+  const result = await resetCallDates(callWeekDates(now), { silent: true });
+  if (state.callsSource === "postgres" && !result.server) return false;
+  localStorage.setItem(resetKey, new Date().toISOString());
+  if (options.refresh) {
+    state.expandedCallCustomerNo = "";
+    state.selectedCallCustomers.clear();
+    await renderCalls();
+  }
+  return true;
+}
+
+async function resetCallDates(callDates, options = {}) {
+  const dates = [...new Set(callDates.filter(Boolean))];
+  if (!dates.length) return { server: false, local: false };
+  const resetOnServer = await resetCallDatesInPostgres(dates);
+  const placeholders = dates.map(() => "?").join(",");
+  state.db.run(`DELETE FROM customer_calls WHERE call_date IN (${placeholders})`, dates);
+  if (!resetOnServer) await persistDatabase();
+  state.postgresCallRows = state.postgresCallRows.filter((row) => !dates.includes(String(row.call_date || "")));
+  if (!options.silent && state.selectedCustomer) renderCustomerCalls(state.selectedCustomer.customer_no);
+  return { server: resetOnServer, local: true };
+}
+
+async function resetCallDatesInPostgres(callDates) {
+  try {
+    const response = await fetch("/api/postgres/calls-reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ call_dates: callDates }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return response.ok && data.ok;
+  } catch (error) {
+    console.warn("Postgres call reset unavailable, using SQLite", error);
     return false;
   }
 }

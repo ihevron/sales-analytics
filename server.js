@@ -306,6 +306,26 @@ async function handlePostgresCallStatus(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres", row: rows[0] || row });
 }
 
+async function handlePostgresCallsReset(payload, res) {
+  if (!requirePostgres(res)) return;
+  const dates = [...new Set((Array.isArray(payload.call_dates) ? payload.call_dates : [])
+    .map((date) => String(date || "").trim())
+    .filter(Boolean))];
+  if (!dates.length) {
+    sendJson(res, 400, { ok: false, error: "call_dates are required" });
+    return;
+  }
+
+  for (const date of dates) {
+    await postgresRest(`customer_calls?call_date=eq.${encodeURIComponent(date)}`, {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    });
+  }
+
+  sendJson(res, 200, { ok: true, source: "postgres", reset_dates: dates });
+}
+
 async function handlePostgresCallProfile(payload, res) {
   if (!requirePostgres(res)) return;
   const customerNo = String(payload.customer_no || "");
@@ -1057,6 +1077,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/postgres/call-status" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => handlePostgresCallStatus(payload, res));
+    return;
+  }
+
+  if (requestPath === "/api/postgres/calls-reset" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresCallsReset(payload, res));
     return;
   }
 
