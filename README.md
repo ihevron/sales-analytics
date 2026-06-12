@@ -64,6 +64,45 @@ docker build -t hebrew-sales-analytics .
 docker run -d --name sales-analytics -p 4173:4173 -v sales-analytics-data:/data hebrew-sales-analytics
 ```
 
+## Price Audit API
+
+Server-only internal API for supplier price audits. The service role key is read only from environment variables and is never exposed to browser code.
+
+Required environment variables:
+
+```text
+SUPABASE_POSTGRES_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_POSTGRES_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+PRICE_AUDIT_API_KEY=choose-a-private-api-key
+```
+
+Before using the API, run `supabase/schema.sql` in Supabase SQL Editor. It adds `products.barcode`, creates `supplier_rules`, and seeds the initial supplier rules.
+
+Examples:
+
+```bash
+curl -H "Authorization: Bearer $PRICE_AUDIT_API_KEY" \
+  "http://localhost:4173/api/price-audit/product?barcode=7290001548950"
+
+curl -H "Authorization: Bearer $PRICE_AUDIT_API_KEY" \
+  "http://localhost:4173/api/price-audit/product?itemCode=2165"
+
+curl -X POST "http://localhost:4173/api/price-audit/products/batch" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PRICE_AUDIT_API_KEY" \
+  -d '{"items":[{"barcode":"7290001548950","itemCode":"2165"},{"barcode":"7290018704660","itemCode":"M2260"}]}'
+
+curl -H "Authorization: Bearer $PRICE_AUDIT_API_KEY" \
+  "http://localhost:4173/api/price-audit/supplier-rules?supplier=Import4U"
+```
+
+Vercel:
+
+- Add the same environment variables in Vercel Project Settings.
+- The Serverless Functions live under `api/price-audit/...`.
+- Deploy the repository root `outputs/sales-analytics`.
+- Test the same URLs with the Vercel domain.
+
 בדיקת בריאות:
 
 ```text

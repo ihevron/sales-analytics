@@ -38,6 +38,7 @@ const salesColumns = {
 
 const productColumns = {
   sku: ['מק"ט', "מקט"],
+  barcode: ["ברקוד", "barcode", "Barcode", "EAN", "ean"],
   description: ["תאור", "תיאור"],
   category: ["תאור משפחה", "תיאור משפחה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
@@ -99,6 +100,7 @@ function createSchema() {
     );
     CREATE TABLE IF NOT EXISTS products (
       sku TEXT PRIMARY KEY,
+      barcode TEXT,
       description TEXT,
       category TEXT,
       standard_cost REAL DEFAULT 0,
@@ -146,6 +148,11 @@ function createSchema() {
     CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
   `);
   rebuildSummaryTables();
+}
+
+function ensureColumn(table, column, definition) {
+  const exists = queryRows(`PRAGMA table_info(${table})`).some((row) => row.name === column);
+  if (!exists) state.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function repairShiftedMonthData() {
@@ -404,11 +411,13 @@ function importSalesRows(rows) {
 
 function importProductRows(rows) {
   const now = new Date().toISOString();
+  ensureColumn("products", "barcode", "TEXT");
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, description, category, standard_cost, base_price, weight, supplier, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, description, category, standard_cost, base_price, weight, supplier, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
+      barcode = excluded.barcode,
       description = excluded.description,
       category = excluded.category,
       standard_cost = excluded.standard_cost,
@@ -424,6 +433,7 @@ function importProductRows(rows) {
     if (!mapped.sku) return;
     stmt.run([
       text(mapped.sku),
+      text(mapped.barcode),
       text(mapped.description),
       text(mapped.category),
       number(mapped.standard_cost),

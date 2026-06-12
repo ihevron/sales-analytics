@@ -1,8 +1,11 @@
 -- Supabase Postgres preparation schema.
 -- This runs alongside the existing SQLite/Render flow. Do not drop existing SQLite data.
 
+create extension if not exists pgcrypto;
+
 create table if not exists public.products (
   sku text primary key,
+  barcode text,
   description text,
   family_description text,
   category text,
@@ -15,6 +18,10 @@ create table if not exists public.products (
   units_per_carton numeric default 1,
   updated_at timestamptz default now()
 );
+
+alter table public.products add column if not exists barcode text;
+create index if not exists idx_products_barcode on public.products (barcode);
+create index if not exists idx_products_supplier_name on public.products (supplier);
 
 create table if not exists public.sales_raw (
   id bigserial primary key,
@@ -114,6 +121,41 @@ create table if not exists public.customer_order_items (
 
 create index if not exists idx_order_items_order on public.customer_order_items (order_id);
 create index if not exists idx_order_items_status on public.customer_order_items (order_id, item_status);
+
+create table if not exists public.supplier_rules (
+  id uuid primary key default gen_random_uuid(),
+  supplier_name text not null,
+  rule_name text not null,
+  priority integer default 1,
+  barcode_prefix text,
+  item_code_prefix text,
+  digits_from_end integer,
+  fixed_discount_percent numeric,
+  ignore_invoice_discounts boolean default false,
+  is_active boolean default true,
+  created_at timestamptz default now()
+);
+
+create unique index if not exists idx_supplier_rules_unique_name
+  on public.supplier_rules (supplier_name, rule_name);
+
+create index if not exists idx_supplier_rules_supplier_active
+  on public.supplier_rules (supplier_name, is_active, priority);
+
+insert into public.supplier_rules
+  (supplier_name, rule_name, priority, barcode_prefix, item_code_prefix, digits_from_end, fixed_discount_percent, ignore_invoice_discounts, is_active)
+values
+  ('מונטה קרלו', 'weighted_products_M2_last3', 1, '7290018', 'M2', 3, 4, false, true),
+  ('ויליפוד', 'item_code_5_last3', 1, null, '5', 3, null, false, true),
+  ('Import4U', 'item_code_6_last4', 1, null, '6', 4, null, true, true)
+on conflict (supplier_name, rule_name) do update set
+  priority = excluded.priority,
+  barcode_prefix = excluded.barcode_prefix,
+  item_code_prefix = excluded.item_code_prefix,
+  digits_from_end = excluded.digits_from_end,
+  fixed_discount_percent = excluded.fixed_discount_percent,
+  ignore_invoice_discounts = excluded.ignore_invoice_discounts,
+  is_active = excluded.is_active;
 
 -- Enable RLS only when the final app auth model is ready.
 -- alter table public.products enable row level security;

@@ -133,6 +133,7 @@ const salesColumns = {
 
 const productColumns = {
   sku: ['מק"ט', "מקט"],
+  barcode: ["ברקוד", "barcode", "Barcode", "EAN", "ean"],
   description: ["תאור", "תיאור"],
   category: ["תאור משפחה", "תיאור משפחה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
@@ -250,6 +251,7 @@ function createSharedSchema() {
     );
     CREATE TABLE IF NOT EXISTS products (
       sku TEXT PRIMARY KEY,
+      barcode TEXT,
       description TEXT,
       category TEXT,
       standard_cost REAL DEFAULT 0,
@@ -344,6 +346,7 @@ function createManagementSchema() {
     CREATE INDEX IF NOT EXISTS idx_orders_customer ON customer_orders (customer_no, order_date);
     CREATE INDEX IF NOT EXISTS idx_order_items_order ON customer_order_items (order_id);
   `);
+  ensureColumn("products", "barcode", "TEXT");
   ensureColumn("products", "pick_order", "REAL DEFAULT 999999");
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
@@ -697,9 +700,10 @@ function importProductRows(rows) {
   const products = [];
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
+      barcode = excluded.barcode,
       description = excluded.description,
       category = excluded.category,
       standard_cost = excluded.standard_cost,
@@ -717,6 +721,7 @@ function importProductRows(rows) {
     if (!mapped.sku) return;
     const product = {
       sku: text(mapped.sku),
+      barcode: text(mapped.barcode),
       description: text(mapped.description),
       category: text(mapped.category),
       standard_cost: number(mapped.standard_cost),
@@ -729,7 +734,7 @@ function importProductRows(rows) {
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
-    stmt.run([product.sku, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
+    stmt.run([product.sku, product.barcode, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
   });
   state.db.run("COMMIT");
   stmt.free();

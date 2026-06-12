@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { createPriceAuditService, isAuthorized: isPriceAuditAuthorized } = require("./price-audit-core");
 
 const root = __dirname;
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, "data"));
@@ -17,8 +18,13 @@ const useSupabase = Boolean(supabaseUrl && supabaseServiceRoleKey);
 const postgresPreviewUrl = normalizeSupabaseUrl(process.env.SUPABASE_POSTGRES_URL || "");
 const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
 const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
+const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
+const priceAuditService = createPriceAuditService({
+  supabaseUrl: postgresPreviewUrl || supabaseUrl,
+  serviceKey: postgresPreviewKey || supabaseServiceRoleKey,
+});
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -163,6 +169,54 @@ function requirePostgres(res) {
   return false;
 }
 
+function requirePriceAudit(req, res) {
+  if (!priceAuditService.isConfigured()) {
+    sendJson(res, 503, {
+      ok: false,
+      error: "Supabase server credentials are not configured",
+      required_env: ["SUPABASE_POSTGRES_URL", "SUPABASE_POSTGRES_SERVICE_ROLE_KEY"],
+    });
+    return false;
+  }
+  if (!isPriceAuditAuthorized(req, priceAuditApiKey)) {
+    sendJson(res, 401, { ok: false, error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+async function handlePriceAuditProduct(req, res) {
+  if (!requirePriceAudit(req, res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const barcode = (url.searchParams.get("barcode") || "").trim();
+  const itemCode = (url.searchParams.get("itemCode") || "").trim();
+  if (!barcode && !itemCode) {
+    sendJson(res, 400, { ok: false, error: "barcode or itemCode is required" });
+    return;
+  }
+
+  const result = await priceAuditService.findProduct({ barcode, itemCode });
+  if (!result.product) {
+    sendJson(res, 404, { ok: false, match_type: "not_found" });
+    return;
+  }
+  sendJson(res, 200, result.product);
+}
+
+async function handlePriceAuditProductsBatch(payload, req, res) {
+  if (!requirePriceAudit(req, res)) return;
+  const results = await priceAuditService.batchProducts(payload.items);
+  sendJson(res, 200, { results });
+}
+
+async function handlePriceAuditSupplierRules(req, res) {
+  if (!requirePriceAudit(req, res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const supplier = (url.searchParams.get("supplier") || "").trim();
+  const rules = await priceAuditService.supplierRules(supplier);
+  sendJson(res, 200, { rules });
+}
+
 async function handlePostgresProducts(req, res) {
   if (!requirePostgres(res)) return;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -204,6 +258,7 @@ async function handlePostgresProductsImport(payload, res) {
       const standardCost = numberValue(product.standard_cost);
       return {
         sku,
+        barcode: String(product.barcode || "").trim(),
         description: String(product.description || "").trim(),
         family_description: category,
         category,
@@ -1042,6 +1097,27 @@ const server = http.createServer((req, res) => {
     handlePostgresPreview(res).catch((error) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres preview failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/price-audit/product" && req.method === "GET") {
+    handlePriceAuditProduct(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, error.status || 500, { ok: false, error: error.message || "price audit lookup failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/price-audit/products/batch" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePriceAuditProductsBatch(payload, req, res));
+    return;
+  }
+
+  if (requestPath === "/api/price-audit/supplier-rules" && req.method === "GET") {
+    handlePriceAuditSupplierRules(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, error.status || 500, { ok: false, error: error.message || "supplier rules lookup failed" });
     });
     return;
   }
