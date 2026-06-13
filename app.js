@@ -38,7 +38,7 @@ const salesColumns = {
 
 const productColumns = {
   sku: ['מק"ט', "מקט"],
-  barcode: ["ברקוד", "barcode", "Barcode", "EAN", "ean"],
+  barcode: ["ברקוד", "בר קוד", "קוד ברקוד", "ברקוד מוצר", "ברקוד פריט", "barcode", "bar code", "Barcode", "BARCODE", "EAN", "ean", "EAN13", "EAN-13", "UPC", "GTIN"],
   description: ["תאור", "תיאור"],
   category: ["תאור משפחה", "תיאור משפחה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
@@ -433,7 +433,7 @@ function importProductRows(rows) {
     if (!mapped.sku) return;
     stmt.run([
       text(mapped.sku),
-      text(mapped.barcode),
+      barcodeValue(mapped.barcode || inferBarcode(row)),
       text(mapped.description),
       text(mapped.category),
       number(mapped.standard_cost),
@@ -990,6 +990,21 @@ function number(value) {
 
 function text(value) {
   return String(value ?? "").trim();
+}
+
+function barcodeValue(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "number") return Number.isFinite(value) ? String(Math.trunc(value)) : "";
+  return String(value).trim().replace(/[^\dA-Za-z]/g, "");
+}
+
+function inferBarcode(row) {
+  const skip = new Set(["sku", "מק\"ט", "מקט", "description", "תאור", "תיאור", "supplier", "ספק", "שם ספק"]);
+  return Object.entries(row).find(([key, value]) => {
+    if (skip.has(normalizeHeader(key))) return false;
+    const candidate = barcodeValue(value);
+    return /^\d{8,14}$/.test(candidate);
+  })?.[1] || "";
 }
 
 function parseDate(value) {
