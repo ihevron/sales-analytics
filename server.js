@@ -249,6 +249,7 @@ async function handlePostgresProductFilters(res) {
 
 async function handlePostgresProductsImport(payload, res) {
   if (!requirePostgres(res)) return;
+  await assertProductsImportSchema();
   const products = Array.isArray(payload.products) ? payload.products : [];
   const now = new Date().toISOString();
   const rows = [...new Map(products
@@ -285,6 +286,18 @@ async function handlePostgresProductsImport(payload, res) {
     }
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+}
+
+async function assertProductsImportSchema() {
+  try {
+    await postgresRows("products?select=sku,barcode&limit=1");
+  } catch (error) {
+    if (/barcode/i.test(error.message || "")) {
+      error.status = 400;
+      error.message = "בסופאבייס חסרה עמודת barcode בטבלת products. יש להריץ שוב את outputs/sales-analytics/supabase/schema.sql ואז לייבא מחדש את קובץ המוצרים.";
+    }
+    throw error;
+  }
 }
 
 async function handlePostgresCalls(req, res) {
@@ -645,7 +658,7 @@ function handleJsonPost(req, res, callback) {
     }
     callback(payload).catch((error) => {
       console.error(error);
-      sendJson(res, 500, { ok: false, error: error.message || "save failed" });
+      sendJson(res, error.status || 500, { ok: false, error: error.message || "save failed" });
     });
   });
 

@@ -351,7 +351,7 @@ async function importFile(event, type) {
   } catch (error) {
     console.error(error);
     setStatus("שגיאה בייבוא הקובץ");
-    alert("שגיאה בייבוא הקובץ. יש לבדוק שהעמודות תואמות למפרט.");
+    alert(`שגיאה בייבוא הקובץ:\n${error.message || "יש לבדוק שהעמודות תואמות למפרט."}`);
   } finally {
     event.target.value = "";
   }
