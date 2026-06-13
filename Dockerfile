@@ -8,7 +8,8 @@ ENV DATA_DIR=/data
 
 COPY package.json ./
 RUN npm install --omit=dev
-COPY index.html app.js styles.css server.js README.md ./
+COPY index.html app.js styles.css server.js price-audit-core.js README.md ./
+COPY api ./api
 COPY management ./management
 COPY management-postgres ./management-postgres
 
