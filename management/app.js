@@ -3748,6 +3748,9 @@ function callDateForDay(day, referenceDate = new Date()) {
 }
 
 function callDaysForCustomer(customerNo) {
+  const postgresRow = state.postgresCallRows.find((row) => String(row.customer_no) === String(customerNo));
+  const postgresDays = String(postgresRow?.days || "").split(",").map((day) => day.trim()).filter(Boolean);
+  if (postgresDays.length) return postgresDays;
   const profile = firstRow("SELECT days FROM customer_call_profiles WHERE customer_no = ? AND COALESCE(source, 'calls') = 'calls'", [customerNo]);
   return String(profile.days || "").split(",").map((day) => day.trim()).filter(Boolean);
 }
