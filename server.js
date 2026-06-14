@@ -170,11 +170,11 @@ function requirePostgres(res) {
 }
 
 function requirePriceAudit(req, res) {
-  if (!priceAuditService.isConfigured()) {
+  if (!priceAuditService.isConfigured() && !useSupabase && !fs.existsSync(dbPath)) {
     sendJson(res, 503, {
       ok: false,
       error: "Supabase server credentials are not configured",
-      required_env: ["SUPABASE_POSTGRES_URL", "SUPABASE_POSTGRES_SERVICE_ROLE_KEY"],
+      required_env: ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
     });
     return false;
   }
@@ -195,7 +195,7 @@ async function handlePriceAuditProduct(req, res) {
     return;
   }
 
-  const result = await priceAuditService.findProduct({ barcode, itemCode });
+  const result = await findPriceAuditProduct({ barcode, itemCode });
   if (!result.product) {
     sendJson(res, 404, { ok: false, match_type: "not_found" });
     return;
@@ -205,7 +205,35 @@ async function handlePriceAuditProduct(req, res) {
 
 async function handlePriceAuditProductsBatch(payload, req, res) {
   if (!requirePriceAudit(req, res)) return;
-  const results = await priceAuditService.batchProducts(payload.items);
+  const items = Array.isArray(payload.items) ? payload.items.slice(0, 100) : [];
+  const results = [];
+  const sqliteMisses = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const input = {
+      barcode: String(item?.barcode || "").trim(),
+      itemCode: String(item?.itemCode || item?.item_code || "").trim(),
+    };
+    let result = { match_type: "not_found", product: null };
+    if (priceAuditService.isConfigured()) {
+      try {
+        result = await priceAuditService.findProduct(input);
+      } catch (error) {
+        console.error("price audit postgres lookup failed", error);
+      }
+    }
+    results.push({ input, match_type: result.match_type, product: result.product });
+    if (!result.product) sqliteMisses.push(index);
+  }
+
+  if (sqliteMisses.length) {
+    await withCurrentSqliteDatabase((db) => {
+      sqliteMisses.forEach((index) => {
+        const result = findPriceAuditProductInSqliteDb(db, results[index].input);
+        results[index] = { input: results[index].input, match_type: result.match_type, product: result.product };
+      });
+    });
+  }
   sendJson(res, 200, { results });
 }
 
@@ -215,6 +243,85 @@ async function handlePriceAuditSupplierRules(req, res) {
   const supplier = (url.searchParams.get("supplier") || "").trim();
   const rules = await priceAuditService.supplierRules(supplier);
   sendJson(res, 200, { rules });
+}
+
+async function findPriceAuditProduct(input) {
+  if (priceAuditService.isConfigured()) {
+    try {
+      const result = await priceAuditService.findProduct(input);
+      if (result.product) return result;
+    } catch (error) {
+      console.error("price audit postgres lookup failed", error);
+    }
+  }
+  return findPriceAuditProductInSqlite(input);
+}
+
+async function findPriceAuditProductInSqlite(input = {}) {
+  return withCurrentSqliteDatabase((db) => findPriceAuditProductInSqliteDb(db, input));
+}
+
+async function withCurrentSqliteDatabase(task) {
+  const SQL = await initServerSql();
+  const buffer = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(buffer);
+  try {
+    return await task(db);
+  } finally {
+    db.close();
+  }
+}
+
+function findPriceAuditProductInSqliteDb(db, input = {}) {
+  const barcode = String(input.barcode || "").trim();
+  const itemCode = String(input.itemCode || input.item_code || "").trim();
+  if (!barcode && !itemCode) return { match_type: "not_found", product: null };
+
+  const columns = sqliteColumns(db, "products");
+  let row = null;
+  if (barcode && columns.has("barcode")) {
+    row = sqliteSingleRow(db, "SELECT sku, barcode, description, standard_cost, supplier FROM products WHERE barcode = ? LIMIT 1", [barcode]);
+    if (row) return { match_type: "barcode_exact", product: normalizeSqlitePriceAuditProduct(row) };
+  }
+  if (itemCode && columns.has("sku")) {
+    row = sqliteSingleRow(db, "SELECT sku, barcode, description, standard_cost, supplier FROM products WHERE sku = ? LIMIT 1", [itemCode]);
+    if (row) return { match_type: "item_code", product: normalizeSqlitePriceAuditProduct(row) };
+  }
+  return { match_type: "not_found", product: null };
+}
+
+function sqliteColumns(db, table) {
+  const columns = new Set();
+  const stmt = db.prepare(`PRAGMA table_info(${table})`);
+  try {
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      if (row.name) columns.add(String(row.name));
+    }
+  } finally {
+    stmt.free();
+  }
+  return columns;
+}
+
+function sqliteSingleRow(db, sql, values) {
+  const stmt = db.prepare(sql);
+  try {
+    stmt.bind(values);
+    return stmt.step() ? stmt.getAsObject() : null;
+  } finally {
+    stmt.free();
+  }
+}
+
+function normalizeSqlitePriceAuditProduct(row) {
+  return {
+    item_code: String(row.sku || "").trim(),
+    barcode: String(row.barcode || "").trim(),
+    product_name: String(row.description || "").trim(),
+    standard_cost: numberValue(row.standard_cost),
+    supplier_name: String(row.supplier || "").trim(),
+  };
 }
 
 async function handlePostgresProducts(req, res) {
