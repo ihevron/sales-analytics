@@ -458,11 +458,11 @@ async function handlePostgresOrderHistory(req, res) {
   if (!requirePostgres(res)) return;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
-  const allOrders = await postgresRows("customer_orders?select=id,order_date,customer_no,customer_name,status,notes,estimated_total,estimated_profit,picked_by,picked_at,invoice_printed,shipped_at,process_hidden,client_order_key,updated_at&order=id.desc&limit=1000");
+  const visibleFilter = "or=(process_hidden.is.null,process_hidden.eq.0)";
+  const allOrders = await postgresRows(`customer_orders?select=id,order_date,customer_no,customer_name,status,notes,estimated_total,estimated_profit,picked_by,picked_at,invoice_printed,shipped_at,process_hidden,client_order_key,updated_at&${visibleFilter}&order=id.desc&limit=1000`);
   const relevantStatuses = new Set(["מוכן לאיסוף", "picked", "מוכן למשלוח", "נשלחה"]);
   const orders = allOrders
     .filter((row) => relevantStatuses.has(String(row.status || "")))
-    .filter((row) => !dbFlag(row.process_hidden))
     .filter((row) => !query
       || String(row.customer_name || "").toLowerCase().includes(query)
       || String(row.customer_no || "").toLowerCase().includes(query)

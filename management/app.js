@@ -3778,8 +3778,9 @@ function upsertCallStatus(customerNo, customerName, day, status, options = {}) {
 
 async function upsertPostgresCallStatus(row, status, options = {}) {
   const existing = state.postgresCallRows.find((item) => String(item.customer_no) === String(row.customer_no)) || {};
+  const callDate = callDateForDay(state.callsDay, options.referenceDate ? new Date(options.referenceDate) : new Date());
   const payload = {
-    call_date: callDateForDay(state.callsDay, options.referenceDate ? new Date(options.referenceDate) : new Date()),
+    call_date: callDate,
     customer_no: row.customer_no,
     customer_name: row.customer_name,
     status,
@@ -3795,6 +3796,13 @@ async function upsertPostgresCallStatus(row, status, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok) throw new Error(data.error || "שמירת השיחה ל-Postgres נכשלה");
+  upsertCallStatus(row.customer_no, row.customer_name, state.callsDay, status, {
+    referenceDate: options.referenceDate,
+    callAgainTime: payload.call_again_time,
+    whatsappSentAt: payload.whatsapp_sent_at,
+    manualOrderId: payload.manual_order_id,
+    notes: payload.notes,
+  });
   const updated = {
     ...existing,
     ...payload,
