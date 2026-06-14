@@ -213,13 +213,18 @@ async function handlePriceAuditProductsBatch(payload, req, res) {
   const results = inputs.map((input) => ({ input, match_type: "not_found", product: null }));
   const postgresMisses = [];
 
-  await withCurrentSqliteDatabase((db) => {
-    inputs.forEach((input, index) => {
-      const result = findPriceAuditProductInSqliteDb(db, input);
-      results[index] = { input, match_type: result.match_type, product: result.product };
-      if (!result.product) postgresMisses.push(index);
+  try {
+    await withCurrentSqliteDatabase((db) => {
+      inputs.forEach((input, index) => {
+        const result = findPriceAuditProductInSqliteDb(db, input);
+        results[index] = { input, match_type: result.match_type, product: result.product };
+        if (!result.product) postgresMisses.push(index);
+      });
     });
-  });
+  } catch (error) {
+    console.error("price audit sqlite batch lookup failed", error);
+    postgresMisses.push(...inputs.map((_, index) => index));
+  }
 
   if (priceAuditService.isConfigured()) {
     for (const index of postgresMisses) {
@@ -248,18 +253,73 @@ async function findPriceAuditProduct(input) {
     barcode: String(input?.barcode || "").trim(),
     itemCode: String(input?.itemCode || input?.item_code || "").trim(),
   };
-  const sqliteResult = await findPriceAuditProductInSqlite(normalizedInput);
-  if (sqliteResult.product) return sqliteResult;
+  try {
+    const sqliteResult = await findPriceAuditProductInSqlite(normalizedInput);
+    if (sqliteResult.product) return sqliteResult;
+  } catch (error) {
+    console.error("price audit sqlite lookup failed", error);
+  }
 
+  return findPriceAuditProductInPostgres(normalizedInput);
+}
+
+async function findPriceAuditProductInPostgres(input) {
   if (priceAuditService.isConfigured()) {
     try {
-      const result = await priceAuditService.findProduct(normalizedInput);
+      const result = await priceAuditService.findProduct(input);
       if (result.product) return result;
     } catch (error) {
       console.error("price audit postgres lookup failed", error);
     }
   }
   return { match_type: "not_found", product: null };
+}
+
+async function handlePriceAuditDiagnostics(req, res) {
+  if (!requirePriceAudit(req, res)) return;
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const input = {
+    barcode: (url.searchParams.get("barcode") || "").trim(),
+    itemCode: (url.searchParams.get("itemCode") || "").trim(),
+  };
+  const diagnostics = {
+    input,
+    storage: {
+      configured: useSupabase,
+      host: supabaseUrl ? new URL(supabaseUrl).host : "",
+      bucket: supabaseBucket,
+      object: supabaseDbObject,
+      ok: false,
+      products_count: null,
+      product: null,
+      error: "",
+    },
+    postgres: {
+      configured: priceAuditService.isConfigured(),
+      host: (postgresPreviewUrl || supabaseUrl) ? new URL(postgresPreviewUrl || supabaseUrl).host : "",
+      table: "products",
+      product: null,
+      error: "",
+    },
+  };
+
+  try {
+    await withCurrentSqliteDatabase((db) => {
+      diagnostics.storage.ok = true;
+      diagnostics.storage.products_count = Number(sqliteSingleRow(db, "SELECT COUNT(*) AS count FROM products", []).count || 0);
+      diagnostics.storage.product = findPriceAuditProductInSqliteDb(db, input);
+    });
+  } catch (error) {
+    diagnostics.storage.error = error.message || "sqlite diagnostics failed";
+  }
+
+  try {
+    diagnostics.postgres.product = await findPriceAuditProductInPostgres(input);
+  } catch (error) {
+    diagnostics.postgres.error = error.message || "postgres diagnostics failed";
+  }
+
+  sendJson(res, 200, diagnostics);
 }
 
 async function findPriceAuditProductInSqlite(input = {}) {
@@ -1249,6 +1309,14 @@ const server = http.createServer((req, res) => {
     handlePriceAuditSupplierRules(req, res).catch((error) => {
       console.error(error);
       sendJson(res, error.status || 500, { ok: false, error: error.message || "supplier rules lookup failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/price-audit/diagnostics/product" && req.method === "GET") {
+    handlePriceAuditDiagnostics(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, error.status || 500, { ok: false, error: error.message || "price audit diagnostics failed" });
     });
     return;
   }
