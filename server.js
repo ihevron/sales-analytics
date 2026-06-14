@@ -462,7 +462,7 @@ async function handlePostgresOrderHistory(req, res) {
   const relevantStatuses = new Set(["מוכן לאיסוף", "picked", "מוכן למשלוח", "נשלחה"]);
   const orders = allOrders
     .filter((row) => relevantStatuses.has(String(row.status || "")))
-    .filter((row) => !row.process_hidden)
+    .filter((row) => !dbFlag(row.process_hidden))
     .filter((row) => !query
       || String(row.customer_name || "").toLowerCase().includes(query)
       || String(row.customer_no || "").toLowerCase().includes(query)
@@ -1032,6 +1032,13 @@ async function handleOrderDelta(payload, res) {
 function numberValue(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function dbFlag(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value === null || value === undefined) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function handleStatic(req, res) {

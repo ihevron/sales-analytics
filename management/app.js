@@ -2998,9 +2998,9 @@ async function syncOrderHistoryFromPostgres() {
         number(order.estimated_profit),
         order.picked_by || null,
         order.picked_at || null,
-        order.invoice_printed ? 1 : 0,
+        dbFlag(order.invoice_printed) ? 1 : 0,
         order.shipped_at || null,
-        order.process_hidden ? 1 : 0,
+        dbFlag(order.process_hidden) ? 1 : 0,
         order.updated_at || new Date().toISOString(),
         order.client_order_key || null,
       ]);
@@ -3025,7 +3025,7 @@ async function syncOrderHistoryFromPostgres() {
         number(item.entry_sequence),
         item.is_carton ? 1 : 0,
         number(item.units_per_carton) || 1,
-        item.shortage_dismissed ? 1 : 0,
+        dbFlag(item.shortage_dismissed) ? 1 : 0,
         number(item.estimated_price),
         number(item.estimated_profit),
       ]);
@@ -4632,6 +4632,13 @@ function number(value) {
   const cleaned = String(value ?? "").replace(/[,\s₪]/g, "");
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function dbFlag(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value === null || value === undefined) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function quantityNumber(value) {
