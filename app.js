@@ -338,7 +338,10 @@ async function importFile(event, type) {
       importSalesRows(rows);
       repairShiftedMonthData();
     }
-    if (type === "products") importProductRows(rows);
+    if (type === "products") {
+      const importedProducts = importProductRows(rows);
+      await importProductsToPostgres(importedProducts);
+    }
     rebuildSummaryTables();
     const persisted = await persistDatabase();
     await refreshAll();
@@ -411,6 +414,7 @@ function importSalesRows(rows) {
 
 function importProductRows(rows) {
   const now = new Date().toISOString();
+  const products = [];
   ensureColumn("products", "barcode", "TEXT");
   const stmt = state.db.prepare(`
     INSERT INTO products
@@ -431,20 +435,39 @@ function importProductRows(rows) {
   rows.forEach((row) => {
     const mapped = mapRow(row, productColumns);
     if (!mapped.sku) return;
-    stmt.run([
-      text(mapped.sku),
-      barcodeValue(mapped.barcode || inferBarcode(row)),
-      text(mapped.description),
-      text(mapped.category),
-      number(mapped.standard_cost),
-      number(mapped.base_price),
-      number(mapped.weight),
-      text(mapped.supplier),
-      now,
-    ]);
+    const product = {
+      sku: text(mapped.sku),
+      barcode: barcodeValue(mapped.barcode || inferBarcode(row)),
+      description: text(mapped.description),
+      category: text(mapped.category),
+      standard_cost: number(mapped.standard_cost),
+      sale_price: number(mapped.base_price),
+      weight: number(mapped.weight),
+      supplier: text(mapped.supplier),
+      updated_at: now,
+    };
+    product.purchase_price = product.standard_cost;
+    products.push(product);
+    stmt.run([product.sku, product.barcode, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
+  return [...new Map(products.map((product) => [product.sku, product])).values()];
+}
+
+async function importProductsToPostgres(products) {
+  if (!products.length) return { ok: true, imported: 0 };
+  const response = await fetch("/api/postgres/products-import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ products }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (data.configured === false) return data;
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "ייבוא המוצרים ל-Supabase נכשל");
+  }
+  return data;
 }
 
 function renderDashboard() {
