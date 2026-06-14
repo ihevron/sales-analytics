@@ -206,33 +206,31 @@ async function handlePriceAuditProduct(req, res) {
 async function handlePriceAuditProductsBatch(payload, req, res) {
   if (!requirePriceAudit(req, res)) return;
   const items = Array.isArray(payload.items) ? payload.items.slice(0, 100) : [];
-  const results = [];
-  const sqliteMisses = [];
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
-    const input = {
-      barcode: String(item?.barcode || "").trim(),
-      itemCode: String(item?.itemCode || item?.item_code || "").trim(),
-    };
-    let result = { match_type: "not_found", product: null };
-    if (priceAuditService.isConfigured()) {
+  const inputs = items.map((item) => ({
+    barcode: String(item?.barcode || "").trim(),
+    itemCode: String(item?.itemCode || item?.item_code || "").trim(),
+  }));
+  const results = inputs.map((input) => ({ input, match_type: "not_found", product: null }));
+  const postgresMisses = [];
+
+  await withCurrentSqliteDatabase((db) => {
+    inputs.forEach((input, index) => {
+      const result = findPriceAuditProductInSqliteDb(db, input);
+      results[index] = { input, match_type: result.match_type, product: result.product };
+      if (!result.product) postgresMisses.push(index);
+    });
+  });
+
+  if (priceAuditService.isConfigured()) {
+    for (const index of postgresMisses) {
+      const input = inputs[index];
       try {
-        result = await priceAuditService.findProduct(input);
+        const result = await priceAuditService.findProduct(input);
+        results[index] = { input, match_type: result.match_type, product: result.product };
       } catch (error) {
         console.error("price audit postgres lookup failed", error);
       }
     }
-    results.push({ input, match_type: result.match_type, product: result.product });
-    if (!result.product) sqliteMisses.push(index);
-  }
-
-  if (sqliteMisses.length) {
-    await withCurrentSqliteDatabase((db) => {
-      sqliteMisses.forEach((index) => {
-        const result = findPriceAuditProductInSqliteDb(db, results[index].input);
-        results[index] = { input: results[index].input, match_type: result.match_type, product: result.product };
-      });
-    });
   }
   sendJson(res, 200, { results });
 }
@@ -246,15 +244,22 @@ async function handlePriceAuditSupplierRules(req, res) {
 }
 
 async function findPriceAuditProduct(input) {
+  const normalizedInput = {
+    barcode: String(input?.barcode || "").trim(),
+    itemCode: String(input?.itemCode || input?.item_code || "").trim(),
+  };
+  const sqliteResult = await findPriceAuditProductInSqlite(normalizedInput);
+  if (sqliteResult.product) return sqliteResult;
+
   if (priceAuditService.isConfigured()) {
     try {
-      const result = await priceAuditService.findProduct(input);
+      const result = await priceAuditService.findProduct(normalizedInput);
       if (result.product) return result;
     } catch (error) {
       console.error("price audit postgres lookup failed", error);
     }
   }
-  return findPriceAuditProductInSqlite(input);
+  return { match_type: "not_found", product: null };
 }
 
 async function findPriceAuditProductInSqlite(input = {}) {
