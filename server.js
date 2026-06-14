@@ -458,8 +458,7 @@ async function handlePostgresOrderHistory(req, res) {
   if (!requirePostgres(res)) return;
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const query = (url.searchParams.get("q") || "").trim().toLowerCase();
-  const visibleFilter = "or=(process_hidden.is.null,process_hidden.eq.0)";
-  const allOrders = await postgresRows(`customer_orders?select=id,order_date,customer_no,customer_name,status,notes,estimated_total,estimated_profit,picked_by,picked_at,invoice_printed,shipped_at,process_hidden,client_order_key,updated_at&${visibleFilter}&order=id.desc&limit=1000`);
+  const allOrders = await postgresRows("customer_orders?select=id,order_date,customer_no,customer_name,status,notes,estimated_total,estimated_profit,picked_by,picked_at,invoice_printed,shipped_at,process_hidden,client_order_key,updated_at&order=id.desc&limit=1000");
   const relevantStatuses = new Set(["מוכן לאיסוף", "picked", "מוכן למשלוח", "נשלחה"]);
   const orders = allOrders
     .filter((row) => relevantStatuses.has(String(row.status || "")))
@@ -472,7 +471,7 @@ async function handlePostgresOrderHistory(req, res) {
   const items = orderIds.length
     ? await postgresRows(`customer_order_items?select=id,order_id,sku,product_desc,quantity,picked_quantity,note,item_status,substitute_product_id,action_sequence,entry_sequence,is_carton,units_per_carton,shortage_dismissed,estimated_price,estimated_profit&order_id=in.(${orderIds.join(",")})&order=order_id.desc,id.asc&limit=5000`)
     : [];
-  sendJson(res, 200, { ok: true, source: "postgres", orders, items });
+  sendJson(res, 200, { ok: true, source: "postgres", counts: { all: allOrders.length, visible: orders.length }, orders, items });
 }
 
 async function handlePostgresOrderPatch(payload, res) {
