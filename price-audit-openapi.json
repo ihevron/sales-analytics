@@ -1,0 +1,178 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Sales Analytics Price Audit API",
+    "version": "1.0.0",
+    "description": "API פנימי לקריאת נתוני מוצר ועלות תקן ממסד הנתונים של אפליקציית ניהול המכירות."
+  },
+  "servers": [
+    {
+      "url": "https://sales-analytics-1-6yen.onrender.com"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      }
+    },
+    "schemas": {
+      "Product": {
+        "type": "object",
+        "properties": {
+          "item_code": { "type": "string" },
+          "barcode": { "type": "string" },
+          "product_name": { "type": "string" },
+          "standard_cost": { "type": "number" },
+          "supplier_name": { "type": "string" }
+        },
+        "required": ["item_code", "barcode", "product_name", "standard_cost", "supplier_name"]
+      },
+      "BatchItem": {
+        "type": "object",
+        "properties": {
+          "barcode": { "type": "string" },
+          "itemCode": { "type": "string" }
+        }
+      },
+      "BatchRequest": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": { "$ref": "#/components/schemas/BatchItem" }
+          }
+        },
+        "required": ["items"]
+      }
+    }
+  },
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/api/price-audit/product": {
+      "get": {
+        "operationId": "getProductForPriceAudit",
+        "summary": "איתור מוצר לפי ברקוד או מקט",
+        "description": "מחזיר מקט, ברקוד, שם מוצר, עלות תקן ושם ספק. אם נשלחים גם ברקוד וגם מקט, החיפוש מתבצע קודם לפי ברקוד ולאחר מכן לפי מקט.",
+        "parameters": [
+          {
+            "name": "barcode",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "ברקוד מוצר"
+          },
+          {
+            "name": "itemCode",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "מקט מוצר"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "מוצר נמצא",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Product" }
+              }
+            }
+          },
+          "404": {
+            "description": "מוצר לא נמצא"
+          }
+        }
+      }
+    },
+    "/api/price-audit/products/batch": {
+      "post": {
+        "operationId": "batchGetProductsForPriceAudit",
+        "summary": "איתור מוצרים באצווה",
+        "description": "מקבל עד 100 רשומות של ברקוד או מקט ומחזיר התאמות לכל רשומה.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BatchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "תוצאות חיפוש",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "input": { "$ref": "#/components/schemas/BatchItem" },
+                          "match_type": {
+                            "type": "string",
+                            "enum": ["barcode_exact", "item_code", "not_found"]
+                          },
+                          "product": {
+                            "anyOf": [
+                              { "$ref": "#/components/schemas/Product" },
+                              { "type": "null" }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/price-audit/supplier-rules": {
+      "get": {
+        "operationId": "getSupplierPriceAuditRules",
+        "summary": "שליפת כללי ספק",
+        "description": "מחזיר כללים פעילים לביקורת מחירי ספקים.",
+        "parameters": [
+          {
+            "name": "supplier",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "שם ספק"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "רשימת כללים",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": { "type": "object" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

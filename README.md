@@ -68,6 +68,14 @@ docker run -d --name sales-analytics -p 4173:4173 -v sales-analytics-data:/data 
 
 Server-only internal API for supplier price audits. The service role key is read only from environment variables and is never exposed to browser code.
 
+OpenAPI schema for ChatGPT Actions:
+
+```text
+https://sales-analytics-1-6yen.onrender.com/price-audit-openapi.json
+```
+
+If `PRICE_AUDIT_API_KEY` is configured, set the Action authentication to API Key, header name `x-api-key`, and paste the same key value there.
+
 Required environment variables:
 
 ```text
