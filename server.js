@@ -223,7 +223,7 @@ async function handlePostgresProducts(req, res) {
   const query = (url.searchParams.get("q") || "").trim();
   const supplier = (url.searchParams.get("supplier") || "").trim();
   const category = (url.searchParams.get("category") || "").trim();
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 500), 1), 1000);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 500), 1), 5000);
   const filters = [];
   if (query) filters.push(`or=(sku.ilike.*${encodeURIComponent(query)}*,description.ilike.*${encodeURIComponent(query)}*)`);
   if (supplier) filters.push(`supplier=eq.${encodeURIComponent(supplier)}`);

@@ -78,6 +78,7 @@ const state = {
   selectedMissedOrders: new Set(),
   processTab: "pending",
   invoiceRows: [],
+  invoiceProductIndex: null,
   manualInvoiceProduct: null,
   persistTimer: null,
   serverSaveInProgress: false,
@@ -620,6 +621,7 @@ async function importFile(event, type) {
     if (type === "products") {
       const importedProducts = importProductRows(rows);
       await importProductsToPostgres(importedProducts);
+      state.invoiceProductIndex = null;
     }
     rebuildSummaryTables();
     const persisted = await persistDatabase();
@@ -1569,7 +1571,7 @@ async function compareSupplierInvoice() {
       document.getElementById("invoice-compare-table").innerHTML = "";
       return;
     }
-    renderInvoiceComparisonRows();
+    await renderInvoiceComparisonRows();
   } catch (error) {
     console.error(error);
     status.textContent = "שגיאה בקריאת החשבונית. ניתן לטעון Excel/CSV, תמונה חדה או PDF קריא.";
@@ -1715,8 +1717,9 @@ function cleanInvoiceDescription(line, sku, numbers) {
   return description;
 }
 
-function renderInvoiceComparisonRows() {
+async function renderInvoiceComparisonRows() {
   const globalDiscount = Math.max(0, number(document.getElementById("invoice-global-discount").value)) / 100;
+  await ensureInvoiceProductIndex();
   const rows = state.invoiceRows.map((row) => invoiceComparisonRow(row, globalDiscount));
   const gaps = rows.filter((row) => row.status === "פער").length;
   const missing = rows.filter((row) => row.status === "לא נמצא").length;
@@ -1732,6 +1735,38 @@ function renderInvoiceComparisonRows() {
     { key: "gap_percent", label: "% פער", format: percent },
     { key: "status", label: "סטטוס", render: invoiceStatusCell },
   ], "invoiceCompare", "gap", "desc");
+}
+
+async function ensureInvoiceProductIndex() {
+  if (state.invoiceProductIndex) return state.invoiceProductIndex;
+  const index = { bySku: new Map(), rows: [], source: "sqlite" };
+  try {
+    const response = await fetch("/api/postgres/products?limit=5000", { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.ok && Array.isArray(data.rows)) {
+      index.source = "postgres";
+      index.rows = data.rows.map(normalizeInvoiceProductRow);
+    }
+  } catch (error) {
+    console.warn("Postgres invoice products unavailable, using SQLite", error);
+  }
+  if (!index.rows.length) {
+    index.rows = queryRows("SELECT sku, description, supplier, standard_cost FROM products").map(normalizeInvoiceProductRow);
+  }
+  index.rows.forEach((product) => {
+    if (product.sku) index.bySku.set(String(product.sku), product);
+  });
+  state.invoiceProductIndex = index;
+  return index;
+}
+
+function normalizeInvoiceProductRow(row = {}) {
+  return {
+    sku: text(row.sku),
+    description: text(row.description),
+    supplier: text(row.supplier),
+    standard_cost: number(row.standard_cost),
+  };
 }
 
 function invoiceComparisonRow(row, globalDiscount) {
@@ -1760,6 +1795,17 @@ function invoiceComparisonRow(row, globalDiscount) {
 }
 
 function findInvoiceProduct(sku, description) {
+  const index = state.invoiceProductIndex;
+  if (index) {
+    if (sku && index.bySku.has(String(sku))) return index.bySku.get(String(sku));
+    if (description) {
+      const needle = String(description).trim();
+      const byDescription = index.rows
+        .filter((product) => product.description.includes(needle) || needle.includes(product.description))
+        .sort((a, b) => String(a.description).length - String(b.description).length)[0];
+      if (byDescription?.sku) return byDescription;
+    }
+  }
   if (sku) {
     const bySku = firstRow("SELECT sku, description, standard_cost FROM products WHERE sku = ?", [sku]);
     if (bySku.sku) return bySku;
