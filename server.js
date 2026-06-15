@@ -19,8 +19,11 @@ const postgresPreviewUrl = normalizeSupabaseUrl(process.env.SUPABASE_POSTGRES_UR
 const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
 const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
+const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
+let databaseBufferCache = null;
+let databaseBufferCacheLoadedAt = 0;
 const priceAuditService = createPriceAuditService({
   supabaseUrl: postgresPreviewUrl || supabaseUrl,
   serviceKey: postgresPreviewKey || supabaseServiceRoleKey,
@@ -700,6 +703,10 @@ function uniqueValues(values) {
 }
 
 async function readDatabaseFromSupabase() {
+  const now = Date.now();
+  if (databaseBufferCache && now - databaseBufferCacheLoadedAt < dbCacheTtlMs) {
+    return Buffer.from(databaseBufferCache);
+  }
   const response = await fetch(supabaseObjectUrl(), {
     headers: supabaseHeaders(),
   });
@@ -710,7 +717,9 @@ async function readDatabaseFromSupabase() {
     throw error;
   }
 
-  return Buffer.from(await response.arrayBuffer());
+  const buffer = Buffer.from(await response.arrayBuffer());
+  updateDatabaseBufferCache(buffer);
+  return Buffer.from(buffer);
 }
 
 async function writeDatabaseToSupabase(body) {
@@ -726,6 +735,12 @@ async function writeDatabaseToSupabase(body) {
   if (!response.ok) {
     throw new Error(`supabase write failed: ${response.status} ${await response.text()}`);
   }
+  updateDatabaseBufferCache(body);
+}
+
+function updateDatabaseBufferCache(body) {
+  databaseBufferCache = Buffer.from(body);
+  databaseBufferCacheLoadedAt = Date.now();
 }
 
 function initServerSql() {
@@ -740,13 +755,19 @@ function initServerSql() {
 
 async function readCurrentDatabaseBuffer() {
   if (useSupabase) return readDatabaseFromSupabase();
-  return fs.promises.readFile(dbPath);
+  if (databaseBufferCache && Date.now() - databaseBufferCacheLoadedAt < dbCacheTtlMs) {
+    return Buffer.from(databaseBufferCache);
+  }
+  const buffer = await fs.promises.readFile(dbPath);
+  updateDatabaseBufferCache(buffer);
+  return Buffer.from(buffer);
 }
 
 async function writeCurrentDatabaseBuffer(body) {
   if (useSupabase) return writeDatabaseToSupabase(body);
   await fs.promises.writeFile(`${dbPath}.tmp`, body);
   await fs.promises.rename(`${dbPath}.tmp`, dbPath);
+  updateDatabaseBufferCache(body);
 }
 
 function enqueueDbMutation(task) {
@@ -756,29 +777,15 @@ function enqueueDbMutation(task) {
 }
 
 async function handleDatabaseGet(res) {
-  if (useSupabase) {
-    try {
-      const data = await readDatabaseFromSupabase();
-      send(res, 200, data, {
-        "Content-Type": "application/octet-stream",
-        "Cache-Control": "no-store",
-      });
-    } catch (error) {
-      send(res, error.status === 404 ? 404 : 500, error.status === 404 ? "" : "database read failed");
-    }
-    return;
-  }
-
-  fs.readFile(dbPath, (error, data) => {
-    if (error) {
-      send(res, 404);
-      return;
-    }
+  try {
+    const data = await readCurrentDatabaseBuffer();
     send(res, 200, data, {
       "Content-Type": "application/octet-stream",
       "Cache-Control": "no-store",
     });
-  });
+  } catch (error) {
+    send(res, error.status === 404 ? 404 : 500, error.status === 404 ? "" : "database read failed");
+  }
 }
 
 function writeDatabaseToDisk(body, callback) {
@@ -1283,6 +1290,12 @@ const server = http.createServer((req, res) => {
         host: supabaseUrl ? new URL(supabaseUrl).host : "",
         bucket: supabaseBucket,
         object: supabaseDbObject,
+      },
+      databaseCache: {
+        loaded: Boolean(databaseBufferCache),
+        bytes: databaseBufferCache ? databaseBufferCache.length : 0,
+        ageSeconds: databaseBufferCacheLoadedAt ? Math.round((Date.now() - databaseBufferCacheLoadedAt) / 1000) : null,
+        ttlSeconds: Math.round(dbCacheTtlMs / 1000),
       },
     });
     return;
