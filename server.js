@@ -647,7 +647,6 @@ async function handlePostgresOrderHistory(req, res) {
 }
 
 async function handlePostgresOrderPatch(payload, res) {
-  if (!requirePostgres(res)) return;
   const orderId = Number(payload.order_id || payload.id || 0);
   if (!orderId) {
     sendJson(res, 400, { ok: false, error: "order_id is required" });
@@ -664,8 +663,36 @@ async function handlePostgresOrderPatch(payload, res) {
     row[key] = value;
   });
   row.updated_at = row.updated_at || new Date().toISOString();
-  await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
-  sendJson(res, 200, { ok: true, source: "postgres" });
+  let postgresResult = { ok: true, skipped: true };
+  if (usePostgresPreview) {
+    await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
+    postgresResult = { ok: true, skipped: false };
+  }
+  const sqliteResult = await patchSqliteOrder(orderId, row);
+  sendJson(res, 200, { ok: true, source: "sqlite+postgres", sqlite: sqliteResult, postgres: postgresResult });
+}
+
+async function patchSqliteOrder(orderId, values) {
+  const keys = Object.keys(values || {});
+  if (!keys.length) return { ok: true, skipped: true };
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    ensureServerColumn(db, "customer_orders", "invoice_printed", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "customer_orders", "shipped_at", "TEXT");
+    ensureServerColumn(db, "customer_orders", "process_hidden", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "customer_orders", "picked_by", "TEXT");
+    ensureServerColumn(db, "customer_orders", "picked_at", "TEXT");
+    ensureServerColumn(db, "customer_orders", "updated_at", "TEXT");
+    const assignments = keys.map((key) => `${key} = ?`).join(", ");
+    db.run(`UPDATE customer_orders SET ${assignments} WHERE id = ?`, [...keys.map((key) => values[key]), orderId]);
+    const exported = Buffer.from(db.export());
+    await writeCurrentDatabaseBuffer(exported);
+    return { ok: true, updated: db.getRowsModified ? db.getRowsModified() : 1 };
+  } finally {
+    db.close();
+  }
 }
 
 function uniqueValues(values) {
@@ -1379,7 +1406,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (requestPath === "/api/postgres/order-patch" && req.method === "POST") {
-    handleJsonPost(req, res, (payload) => handlePostgresOrderPatch(payload, res));
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handlePostgresOrderPatch(payload, res)));
     return;
   }
 
