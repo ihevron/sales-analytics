@@ -4095,7 +4095,7 @@ function renderCallSummary(rows) {
     ["call_again", "לחזור", counts.call_again],
   ];
   document.getElementById("calls-summary").innerHTML = items.map(([status, label, count]) => `
-    <button class="call-summary-card ${state.callsFilter === status ? "active" : ""}" data-call-filter="${status}">
+    <button class="call-summary-card status-${CALL_STATUS_META[status].className} ${state.callsFilter === status ? "active" : ""}" data-call-filter="${status}">
       <span>${label}</span><strong>${integer(count)}</strong>
     </button>
   `).join("");

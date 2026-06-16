@@ -2232,3 +2232,105 @@ td small {
     font-size: 10px;
   }
 }
+
+/* Call status colors and summary tabs */
+.calls-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.call-summary-card {
+  min-height: 64px;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-width: 1px;
+}
+
+.call-summary-card strong {
+  order: -1;
+  margin: 0;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 950;
+}
+
+.call-summary-card span {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.15;
+  font-weight: 850;
+  white-space: normal;
+  text-align: center;
+}
+
+.call-row.status-ordered { border-right-color: #16a34a; }
+.call-row.status-pending { border-right-color: #f59e0b; }
+.call-row.status-no-need { border-right-color: #dc2626; }
+.call-row.status-no-answer { border-right-color: #64748b; }
+.call-row.status-call-again { border-right-color: #2563eb; }
+
+.call-status-pill.ordered { background: #dcfce7; color: #166534; }
+.call-status-pill.pending { background: #fef3c7; color: #92400e; }
+.call-status-pill.no-need { background: #fee2e2; color: #991b1b; }
+.call-status-pill.no-answer { background: #e2e8f0; color: #334155; }
+.call-status-pill.call-again { background: #dbeafe; color: #1d4ed8; }
+
+.call-summary-card.status-ordered {
+  border-color: #86efac;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.call-summary-card.status-pending {
+  border-color: #fcd34d;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.call-summary-card.status-no-need {
+  border-color: #fca5a5;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.call-summary-card.status-no-answer {
+  border-color: #cbd5e1;
+  color: #334155;
+  background: #f8fafc;
+}
+
+.call-summary-card.status-call-again {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.call-summary-card.status-ordered.active { background: #16a34a; border-color: #16a34a; }
+.call-summary-card.status-pending.active { background: #f59e0b; border-color: #f59e0b; }
+.call-summary-card.status-no-need.active { background: #dc2626; border-color: #dc2626; }
+.call-summary-card.status-no-answer.active { background: #64748b; border-color: #64748b; }
+.call-summary-card.status-call-again.active { background: #2563eb; border-color: #2563eb; }
+
+.call-summary-card.active {
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .call-summary-card {
+    min-height: 52px;
+    padding: 6px 3px;
+    gap: 4px;
+  }
+
+  .call-summary-card strong {
+    font-size: 18px;
+  }
+
+  .call-summary-card span {
+    font-size: 10px;
+  }
+}
