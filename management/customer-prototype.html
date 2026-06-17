@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>אזור הזמנות ללקוח - דוגמה</title>
+    <link rel="icon" type="image/png" href="./wa-logo.png" />
+    <link rel="stylesheet" href="./customer-prototype.css" />
+  </head>
+  <body>
+    <main class="customer-demo">
+      <section class="login-screen" aria-label="מסך התחברות לדוגמה">
+        <div class="login-panel">
+          <img class="brand-logo" src="./wa-logo.png" alt="" />
+          <h1>אזור הזמנות ללקוחות</h1>
+          <p>כניסה מאובטחת להזמנה עצמית מתוך קטלוג המוצרים המאושר ללקוח.</p>
+          <label>
+            שם משתמש
+            <input type="text" value="renee-market" />
+          </label>
+          <label>
+            סיסמה
+            <input type="password" value="12345678" />
+          </label>
+          <button>כניסה להזמנה</button>
+        </div>
+      </section>
+
+      <section class="catalog-screen" aria-label="קטלוג הזמנה לדוגמה">
+        <header class="catalog-header">
+          <div>
+            <strong>שלום, מעדניית רנה</strong>
+            <span>הזמנה לשבוע הקרוב</span>
+          </div>
+          <button class="cart-button">עגלה · 7 מוצרים</button>
+        </header>
+
+        <div class="catalog-layout">
+          <aside class="filters-panel">
+            <h2>קטגוריות</h2>
+            <button class="active">מוצרים קבועים</button>
+            <button>סלטים וממרחים</button>
+            <button>גבינות</button>
+            <button>יבשים</button>
+            <button>מבצעים</button>
+          </aside>
+
+          <section class="products-panel">
+            <div class="catalog-toolbar">
+              <input type="search" placeholder="חיפוש מוצר או מק״ט" />
+              <select aria-label="סינון ספק">
+                <option>כל הספקים</option>
+                <option>מונטה קרלו</option>
+                <option>ויליפוד</option>
+                <option>Import4U</option>
+              </select>
+            </div>
+
+            <div class="product-grid">
+              <article class="product-card">
+                <img src="https://images.unsplash.com/photo-1604908812867-8b274c9d2f7b?auto=format&fit=crop&w=600&q=80" alt="פלפל חריף" />
+                <div>
+                  <h3>פלפל חריף 250 גרם</h3>
+                  <span>מק״ט 2165 · מונטה קרלו</span>
+                </div>
+                <strong>₪7.90</strong>
+                <div class="quantity-row">
+                  <button>-</button>
+                  <input value="2" aria-label="כמות" />
+                  <button>+</button>
+                </div>
+              </article>
+
+              <article class="product-card">
+                <img src="https://images.unsplash.com/photo-1626200419199-391ae4be7a41?auto=format&fit=crop&w=600&q=80" alt="גבינה" />
+                <div>
+                  <h3>גבינת שמנת עשבי תיבול</h3>
+                  <span>מק״ט 5402 · ויליפוד</span>
+                </div>
+                <strong>₪18.50</strong>
+                <div class="quantity-row">
+                  <button>-</button>
+                  <input value="1" aria-label="כמות" />
+                  <button>+</button>
+                </div>
+              </article>
+
+              <article class="product-card">
+                <img src="https://images.unsplash.com/photo-1607532941433-304659e8198a?auto=format&fit=crop&w=600&q=80" alt="סלט ירקות" />
+                <div>
+                  <h3>סלט יווני 500 גרם</h3>
+                  <span>מק״ט M2260 · מונטה קרלו</span>
+                </div>
+                <strong>₪21.00</strong>
+                <div class="quantity-row">
+                  <button>-</button>
+                  <input value="0" aria-label="כמות" />
+                  <button>+</button>
+                </div>
+              </article>
+
+              <article class="product-card">
+                <img src="https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80" alt="לחם" />
+                <div>
+                  <h3>קרקרים פריכים</h3>
+                  <span>מק״ט 6021 · Import4U</span>
+                </div>
+                <strong>₪12.40</strong>
+                <div class="quantity-row">
+                  <button>-</button>
+                  <input value="4" aria-label="כמות" />
+                  <button>+</button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <aside class="order-panel">
+            <h2>סיכום הזמנה</h2>
+            <div class="order-line"><span>פלפל חריף</span><strong>2</strong></div>
+            <div class="order-line"><span>גבינת שמנת</span><strong>1</strong></div>
+            <div class="order-line"><span>קרקרים פריכים</span><strong>4</strong></div>
+            <label>
+              הערה להזמנה
+              <textarea rows="3" placeholder="לדוגמה: לשלוח עד 10:00"></textarea>
+            </label>
+            <div class="order-total">
+              <span>סה״כ משוער</span>
+              <strong>₪83.90</strong>
+            </div>
+            <button>שליחת הזמנה</button>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
