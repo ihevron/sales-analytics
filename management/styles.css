@@ -2336,17 +2336,21 @@ td small {
 }
 
 .suggested-actions .suggested-remove {
-  min-height: 28px;
-  padding: 5px 8px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-color: #fecaca;
+  border-radius: 999px;
+  background: #fef2f2;
   color: var(--danger);
   font-size: 0;
-  font-weight: 850;
-  white-space: nowrap;
+  font-weight: 950;
 }
 
 .suggested-actions .suggested-remove::after {
-  content: "לא צריך השבוע";
-  font-size: 12px;
+  content: "X";
+  font-size: 15px;
+  line-height: 1;
 }
 
 .missed-order-header .missed-customer-name {
