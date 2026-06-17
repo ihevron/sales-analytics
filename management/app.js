@@ -546,6 +546,7 @@ function bindEvents() {
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
   document.getElementById("export-selected-priority").addEventListener("click", exportSelectedPriorityOrders);
+  document.getElementById("mark-selected-invoices-printed").addEventListener("click", markSelectedPickedOrdersInvoicesPrinted);
   document.getElementById("select-all-picked-orders").addEventListener("click", selectAllPickedProcessOrders);
   document.getElementById("clear-selected-orders").addEventListener("click", () => {
     state.selectedProcessOrders.clear();
@@ -2316,6 +2317,7 @@ async function saveOrder() {
   resetOrder({ clearCustomer: true });
   renderPicking();
   renderOrderHistory();
+  await renderCalls();
 }
 
 function resetOrder(options = {}) {
@@ -3224,7 +3226,7 @@ function renderMissedOrders(query) {
       <div class="missed-order-header">
         <label class="inline-check"><input type="checkbox" data-missed-select="${group.order.order_id}" ${state.selectedMissedOrders.has(String(group.order.order_id)) ? "checked" : ""} /> בחירה</label>
         <strong>הזמנת חוסרים ${integer(group.order.order_id)}</strong>
-        <span>${escapeHtml(group.order.customer_name)}</span>
+        <span class="missed-customer-name">${escapeHtml(group.order.customer_name)}</span>
         <span>${escapeHtml(group.order.order_date)}</span>
         <div class="missed-order-actions">
           <button class="danger-action" data-delete-missed="${group.order.order_id}">מחיקה</button>
@@ -3645,6 +3647,35 @@ function selectAllPickedProcessOrders() {
     LIMIT 500
   `, [query, query, query]);
   rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
+  renderOrderHistory();
+}
+
+function selectedPickedOrderIds() {
+  const ids = [...state.selectedProcessOrders].map((id) => String(id));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return queryRows(`
+    SELECT id
+    FROM customer_orders
+    WHERE CAST(id AS TEXT) IN (${placeholders})
+      AND status = 'picked'
+      AND COALESCE(process_hidden, 0) = 0
+  `, ids).map((row) => String(row.id));
+}
+
+async function markSelectedPickedOrdersInvoicesPrinted() {
+  const ids = selectedPickedOrderIds();
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית הזמנות שלוקטו.");
+  if (!confirm(`לסמן ${integer(ids.length)} חשבוניות כהודפסו ולהעביר למוכן למשלוח?`)) return;
+  const now = new Date().toISOString();
+  const results = await Promise.all(ids.map(async (orderId) => {
+    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, updated_at = ? WHERE id = ?", [ORDER_STATUSES[2], now, orderId]);
+    return patchPostgresOrder(orderId, { invoice_printed: true, status: ORDER_STATUSES[2], updated_at: now });
+  }));
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length) alert(`${integer(failed.length)} הזמנות לא נשמרו לשרת.`);
   renderOrderHistory();
 }
 

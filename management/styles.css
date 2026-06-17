@@ -2334,3 +2334,24 @@ td small {
     font-size: 10px;
   }
 }
+
+.suggested-actions .suggested-remove {
+  min-height: 28px;
+  padding: 5px 8px;
+  color: var(--danger);
+  font-size: 0;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.suggested-actions .suggested-remove::after {
+  content: "לא צריך השבוע";
+  font-size: 12px;
+}
+
+.missed-order-header .missed-customer-name {
+  margin-inline-start: auto;
+  text-align: right;
+  font-weight: 900;
+  color: var(--ink);
+}

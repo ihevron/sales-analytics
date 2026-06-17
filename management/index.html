@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260611manualinvoice" />
+    <link rel="stylesheet" href="./styles.css?v=20260617processbulk" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260611manualinvoice"></script>
+    <script defer src="./app.js?v=20260617processbulk"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -241,6 +241,7 @@
             <div class="process-pane" data-process-pane="picked">
               <div class="bulk-order-actions">
                 <button class="secondary-action" id="export-selected-priority" type="button">יצוא נבחרים לפריוריטי</button>
+                <button class="primary-action" id="mark-selected-invoices-printed" type="button">חשבוניות הודפסו - העבר למוכן למשלוח</button>
                 <button class="secondary-action" id="select-all-picked-orders" type="button">סמן הכל</button>
                 <button class="secondary-action" id="clear-selected-orders" type="button">בטל סימון</button>
               </div>
