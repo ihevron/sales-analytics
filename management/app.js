@@ -909,7 +909,7 @@ async function importCallCustomersFile(event) {
   try {
     document.getElementById("calls-import-status").textContent = "קורא קובץ...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false });
+    const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false, forceFixedColumns: true });
     const imported = importedProfiles.length;
     await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
@@ -931,7 +931,7 @@ async function importCustomerAppCustomersFile(event) {
   try {
     status.textContent = "קורא קובץ לקוחות...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false });
+    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false, forceFixedColumns: true });
     await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
     state.postgresCallRows = [];
@@ -959,7 +959,7 @@ function importCallCustomerSheets(sheets, options = {}) {
   const useSheetNameDays = options.useSheetNameDays !== false;
   sheets.forEach((sheet) => {
     const sheetDay = useSheetNameDays ? dayFromText(sheet.name) : "";
-    const parsed = parseCallCustomerSheet(sheet.rows);
+    const parsed = parseCallCustomerSheet(sheet.rows, options);
     parsed.rows.forEach((row) => {
       const customerNo = text(row.customer_no);
       const customerName = text(row.customer_name);
@@ -1034,34 +1034,16 @@ async function importCallCustomerProfilesToPostgres(profiles) {
   return data;
 }
 
-function parseCallCustomerSheet(rows) {
+function parseCallCustomerSheet(rows, options = {}) {
+  if (options.forceFixedColumns) {
+    return parseFixedCallCustomerRows(rows);
+  }
   const headerIndex = rows.findIndex((row) => {
     const values = row.map((value) => normalizeHeader(value));
     return values.some((value) => ["מספרלקוח", "קוד", "קודלקוח"].includes(value)) && values.includes("שםלקוח");
   });
   if (headerIndex < 0) {
-    return {
-      rows: fixedRowsToObjects(rows, [
-        "מספר לקוח",
-        "שם לקוח",
-        "שם איש קשר",
-        "טלפון",
-        "עיר",
-        "כתובת",
-        "חפ",
-        "יום הזמנה",
-      ]).map((row) => ({
-        customer_no: text(row["מספר לקוח"]),
-        customer_name: text(row["שם לקוח"]),
-        contact: text(row["שם איש קשר"]),
-        phone: text(row["טלפון"]),
-        phone2: "",
-        city: text(row["עיר"]),
-        address: text(row["כתובת"]),
-        company_id: text(row["חפ"]),
-        days: text(row["יום הזמנה"]),
-      })).filter((row) => row.customer_no || row.customer_name),
-    };
+    return parseFixedCallCustomerRows(rows);
   }
   const headers = rows[headerIndex].map((value) => normalizeHeader(value));
   const indexFor = (...names) => {
@@ -1093,6 +1075,31 @@ function parseCallCustomerSheet(rows) {
     days: valueAt(row, "days"),
   })).filter((row) => row.customer_no || row.customer_name);
   return { rows: parsedRows };
+}
+
+function parseFixedCallCustomerRows(rows) {
+  return {
+    rows: fixedRowsToObjects(rows, [
+      "מספר לקוח",
+      "שם לקוח",
+      "שם איש קשר",
+      "טלפון",
+      "עיר",
+      "כתובת",
+      "חפ",
+      "יום הזמנה",
+    ]).map((row) => ({
+      customer_no: text(row["מספר לקוח"]),
+      customer_name: text(row["שם לקוח"]),
+      contact: text(row["שם איש קשר"]),
+      phone: text(row["טלפון"]),
+      phone2: "",
+      city: text(row["עיר"]),
+      address: text(row["כתובת"]),
+      company_id: text(row["חפ"]),
+      days: text(row["יום הזמנה"]),
+    })).filter((row) => row.customer_no || row.customer_name),
+  };
 }
 
 function normalizeCallDays(value) {
