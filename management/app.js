@@ -887,9 +887,10 @@ function parseCallCustomerSheet(rows) {
     phone2: indexFor("טלפון נוסף", "נייד נוסף"),
     city: indexFor("עיר"),
     address: indexFor("כתובת", "כתובת לקוח", "מען"),
-    company_id: indexFor("ח.פ", "ח״פ", "חפ", "עוסק מורשה", "מספר עוסק", "מספר ח.פ", "company_id"),
+    company_id: indexFor("ח.פ", "ח״פ", "חפ", "ח.פ.", "מס חפ", "מספר חפ", "מספר ח.פ", "מספר ח.פ.", "ע.מ", "עמ", "עוסק", "עוסק מורשה", "מספר עוסק", "מספר עוסק מורשה", "company_id"),
     days: indexFor("ימי שיחה", "יום שיחה", "יום", "ימים"),
   };
+  if (indexes.company_id < 0 && headers[6] && /(חפ|עוסק|עמ)/.test(headers[6])) indexes.company_id = 6;
   const valueAt = (row, key) => indexes[key] >= 0 ? text(row[indexes[key]]) : "";
   const parsedRows = rows.slice(headerIndex + 1).map((row) => ({
     customer_no: valueAt(row, "customer_no"),
