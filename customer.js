@@ -32,13 +32,18 @@ const state = {
   section: "recommended",
   hasCustomerHistory: false,
   quantitySku: "",
+  loginMode: "existing",
 };
 
 document.addEventListener("DOMContentLoaded", init);
 
 function init() {
   document.getElementById("login-form").addEventListener("submit", login);
+  document.getElementById("register-form").addEventListener("submit", registerCustomer);
   document.getElementById("logout-button").addEventListener("click", logout);
+  document.querySelectorAll("[data-login-mode]").forEach((button) => {
+    button.addEventListener("click", () => setLoginMode(button.dataset.loginMode));
+  });
   document.getElementById("product-search").addEventListener("input", debounce((event) => {
     state.search = event.target.value.trim();
     loadProducts();
@@ -68,6 +73,10 @@ function init() {
   document.getElementById("quantity-sheet").addEventListener("click", (event) => {
     if (event.target.id === "quantity-sheet") closeQuantitySheet();
   });
+  document.getElementById("terms-accept").addEventListener("change", (event) => {
+    document.getElementById("terms-confirm").disabled = !event.target.checked;
+  });
+  document.getElementById("terms-confirm").addEventListener("click", acceptTerms);
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       state.section = button.dataset.section;
@@ -78,7 +87,11 @@ function init() {
 
   if (state.token && state.customer) {
     showApp();
-    loadProducts();
+    if (state.customer.terms_accepted_at) {
+      loadProducts();
+    } else {
+      showTermsModal();
+    }
   } else {
     showLogin();
   }
@@ -128,6 +141,29 @@ async function api(path, options = {}) {
   return data;
 }
 
+function setLoginMode(mode) {
+  state.loginMode = mode === "new" ? "new" : "existing";
+  document.querySelectorAll("[data-login-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.loginMode === state.loginMode);
+  });
+  document.getElementById("login-form").hidden = state.loginMode !== "existing";
+  document.getElementById("register-form").hidden = state.loginMode !== "new";
+  document.getElementById("login-message").textContent = "";
+}
+
+async function handleAuthSuccess(data) {
+  state.token = data.token;
+  state.customer = data.customer;
+  localStorage.setItem(TOKEN_KEY, state.token);
+  localStorage.setItem(CUSTOMER_KEY, JSON.stringify(state.customer));
+  showApp();
+  if (data.requires_terms || !state.customer?.terms_accepted_at) {
+    showTermsModal();
+    return;
+  }
+  await loadProducts();
+}
+
 async function login(event) {
   event.preventDefault();
   const message = document.getElementById("login-message");
@@ -140,15 +176,32 @@ async function login(event) {
         companyId: document.getElementById("company-id").value.trim(),
       }),
     });
-    state.token = data.token;
-    state.customer = data.customer;
-    localStorage.setItem(TOKEN_KEY, state.token);
-    localStorage.setItem(CUSTOMER_KEY, JSON.stringify(state.customer));
     message.textContent = "";
-    showApp();
-    await loadProducts();
+    await handleAuthSuccess(data);
   } catch {
     message.textContent = "מספר לקוח או ח.פ אינם תקינים";
+  }
+}
+
+async function registerCustomer(event) {
+  event.preventDefault();
+  const message = document.getElementById("login-message");
+  message.textContent = "פותח לקוח חדש...";
+  try {
+    const data = await api("/api/customer/register", {
+      method: "POST",
+      body: JSON.stringify({
+        customerName: document.getElementById("new-customer-name").value.trim(),
+        companyId: document.getElementById("new-company-id").value.trim(),
+        phone: document.getElementById("new-phone").value.trim(),
+        address: document.getElementById("new-address").value.trim(),
+        termsAccepted: document.getElementById("new-terms").checked,
+      }),
+    });
+    message.textContent = "";
+    await handleAuthSuccess(data);
+  } catch {
+    message.textContent = "לא ניתן לפתוח לקוח חדש כרגע. יש לוודא שמילאת שם עסק, ח.פ, טלפון ואישור תנאים.";
   }
 }
 
@@ -164,6 +217,43 @@ function logout() {
   closeQuantitySheet();
   showLogin();
   renderCart();
+}
+
+function showTermsModal() {
+  document.getElementById("terms-modal").hidden = false;
+  document.body.classList.add("terms-open");
+  document.getElementById("terms-accept").checked = false;
+  document.getElementById("terms-confirm").disabled = true;
+  document.getElementById("terms-message").textContent = "";
+}
+
+function closeTermsModal() {
+  document.getElementById("terms-modal").hidden = true;
+  document.body.classList.remove("terms-open");
+}
+
+async function acceptTerms() {
+  const message = document.getElementById("terms-message");
+  if (!document.getElementById("terms-accept").checked) {
+    message.textContent = "יש לאשר את תנאי השימוש כדי להמשיך";
+    return;
+  }
+  message.textContent = "שומר אישור...";
+  try {
+    const data = await api("/api/customer/terms", {
+      method: "POST",
+      body: JSON.stringify({ accepted: true }),
+    });
+    state.customer = data.customer || {
+      ...state.customer,
+      terms_accepted_at: new Date().toISOString(),
+    };
+    localStorage.setItem(CUSTOMER_KEY, JSON.stringify(state.customer));
+    closeTermsModal();
+    await loadProducts();
+  } catch {
+    message.textContent = "לא ניתן לשמור את האישור כרגע";
+  }
 }
 
 function showLogin() {
@@ -200,6 +290,10 @@ async function loadProducts() {
     renderProducts();
   } catch (error) {
     if (/unauthorized/i.test(error.message)) logout();
+    if (/terms_required/i.test(error.message)) {
+      showTermsModal();
+      return;
+    }
     grid.innerHTML = `<div class="empty-state">לא ניתן לטעון מוצרים כרגע</div>`;
   }
 }

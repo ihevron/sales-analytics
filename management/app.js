@@ -310,6 +310,8 @@ function createManagementSchema() {
       city TEXT,
       address TEXT,
       company_id TEXT,
+      terms_accepted_at TEXT,
+      customer_type TEXT DEFAULT 'existing',
       days TEXT,
       source TEXT DEFAULT 'calls',
       updated_at TEXT
@@ -365,6 +367,8 @@ function createManagementSchema() {
   ensureColumn("customer_calls", "manual_order_id", "INTEGER");
   ensureColumn("customer_call_profiles", "address", "TEXT");
   ensureColumn("customer_call_profiles", "company_id", "TEXT");
+  ensureColumn("customer_call_profiles", "terms_accepted_at", "TEXT");
+  ensureColumn("customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
   ensureColumn("customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
   ensureColumn("customer_orders", "notes", "TEXT");
   ensureColumn("customer_orders", "picked_by", "TEXT");

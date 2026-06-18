@@ -5,27 +5,59 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618d" />
-    <script defer src="./customer.js?v=20260618d"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618e" />
+    <script defer src="./customer.js?v=20260618e"></script>
   </head>
   <body>
     <main class="customer-shell">
       <section id="login-view" class="login-view">
-        <form id="login-form" class="login-card">
+        <div class="login-card">
           <img src="./management/wa-logo.png" alt="" class="login-logo" />
           <h1>כניסה להזמנה</h1>
-          <p>יש להזין מספר לקוח וח.פ / עוסק מורשה.</p>
-          <label>
-            מספר לקוח
-            <input id="customer-no" type="text" inputmode="numeric" autocomplete="username" required />
-          </label>
-          <label>
-            ח.פ / עוסק מורשה
-            <input id="company-id" type="password" autocomplete="current-password" required />
-          </label>
-          <button type="submit">כניסה</button>
+          <p>לקוחות קיימים נכנסים עם מספר לקוח וח.פ. לקוחות חדשים יכולים לפתוח הזמנה ראשונה.</p>
+
+          <div class="login-tabs" role="tablist" aria-label="בחירת סוג כניסה">
+            <button id="login-tab-existing" class="active" type="button" data-login-mode="existing">לקוח קיים</button>
+            <button id="login-tab-new" type="button" data-login-mode="new">לקוח חדש</button>
+          </div>
+
+          <form id="login-form" class="login-form">
+            <label>
+              מספר לקוח
+              <input id="customer-no" type="text" inputmode="numeric" autocomplete="username" required />
+            </label>
+            <label>
+              ח.פ / עוסק מורשה
+              <input id="company-id" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit">כניסה</button>
+          </form>
+
+          <form id="register-form" class="login-form" hidden>
+            <label>
+              שם העסק
+              <input id="new-customer-name" type="text" autocomplete="organization" required />
+            </label>
+            <label>
+              ח.פ / עוסק מורשה
+              <input id="new-company-id" type="text" inputmode="numeric" autocomplete="off" required />
+            </label>
+            <label>
+              טלפון
+              <input id="new-phone" type="tel" autocomplete="tel" required />
+            </label>
+            <label>
+              כתובת
+              <input id="new-address" type="text" autocomplete="street-address" />
+            </label>
+            <label class="checkbox-line">
+              <input id="new-terms" type="checkbox" required />
+              <span>קראתי ואני מאשר/ת את תנאי השימוש והתנאים הכלליים.</span>
+            </label>
+            <button type="submit">פתיחת הזמנה ראשונה</button>
+          </form>
           <div id="login-message" class="message" role="status"></div>
-        </form>
+        </div>
       </section>
 
       <section id="app-view" class="app-view" hidden>
@@ -95,6 +127,23 @@
           <strong id="cart-fab-count">0</strong>
         </button>
         <div id="cart-backdrop" class="cart-backdrop" hidden></div>
+      </section>
+
+      <section id="terms-modal" class="terms-modal" hidden aria-label="אישור תנאי שימוש">
+        <div class="terms-card">
+          <h2>אישור תנאי שימוש</h2>
+          <div class="terms-copy">
+            <p>השימוש באתר מיועד לביצוע הזמנות מול מעדניית רנה בלבד. המחירים, הזמינות והאישור הסופי של ההזמנה כפופים לבדיקת העסק.</p>
+            <p>שליחת הזמנה מהווה בקשה להזמנה. ייתכנו שינויים בכמות, בזמינות, במחיר ובמועד האספקה לפי מלאי ותיאום מול הלקוח.</p>
+            <p>פרטי הלקוח נשמרים לצורך טיפול בהזמנות, שירות ותיאום אספקה. אין להזין פרטי כרטיס אשראי במסך זה.</p>
+          </div>
+          <label class="checkbox-line">
+            <input id="terms-accept" type="checkbox" />
+            <span>קראתי ואני מאשר/ת את תנאי השימוש והתנאים הכלליים.</span>
+          </label>
+          <button id="terms-confirm" class="submit-button" type="button" disabled>אישור והמשך להזמנה</button>
+          <div id="terms-message" class="message" role="status"></div>
+        </div>
       </section>
 
       <section id="quantity-sheet" class="quantity-sheet" hidden aria-label="בחירת כמות">
