@@ -35,7 +35,7 @@
           <input id="sales-file" type="file" accept=".xlsx,.xls,.csv" hidden />
           <input id="products-file" type="file" accept=".xlsx,.xls,.csv" hidden />
           <button class="primary-action" id="import-sales">ייבוא נתוני מכירות</button>
-          <button class="secondary-action" id="import-products">ייבוא נתוני מוצרים</button>
+          <button class="secondary-action hidden" id="import-products">ייבוא נתוני מוצרים</button>
           <p id="import-status" class="status-text">טוען בסיס נתונים</p>
         </div>
       </aside>
@@ -289,7 +289,7 @@
             <div class="calls-workspace">
               <div class="calls-topbar">
                 <input id="calls-customers-file" type="file" accept=".xlsx,.xls,.csv" hidden />
-                <button class="secondary-action call-tool-button" id="import-call-customers"><span class="tool-icon">⇧</span> טעינת לקוחות</button>
+                <button class="secondary-action call-tool-button hidden" id="import-call-customers"><span class="tool-icon">⇧</span> טעינת לקוחות</button>
                 <button class="secondary-action call-tool-button" id="toggle-call-templates"><span class="tool-icon">✎</span> נוסחי WhatsApp</button>
                 <button class="secondary-action call-tool-button" id="reset-call-day"><span class="tool-icon">↺</span> איפוס יום</button>
                 <span id="calls-import-status" class="muted-note"></span>
@@ -502,6 +502,8 @@
                 </div>
               </div>
               <div class="toolbar customer-app-toolbar">
+                <input id="customer-app-customers-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+                <button id="import-customer-app-customers" class="secondary-action" type="button">ייבוא לקוחות</button>
                 <input id="customer-app-customer-query" type="search" placeholder="חיפוש לקוח לפי שם, מספר או ח.פ" />
               </div>
               <div class="table-wrap"><table id="customer-app-customers-table"></table></div>
@@ -515,11 +517,14 @@
                 </div>
               </div>
               <div class="toolbar customer-app-toolbar">
+                <input id="customer-app-products-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+                <button id="import-customer-app-products" class="secondary-action" type="button">ייבוא מוצרים</button>
                 <input id="customer-app-product-query" type="search" placeholder="חיפוש מוצר או מק״ט" />
                 <select id="customer-app-product-supplier"><option value="">כל הספקים</option></select>
                 <select id="customer-app-product-category"><option value="">כל הקטגוריות</option></select>
                 <button id="customer-app-hide-selected" class="secondary-action" type="button">הסתר נבחרים</button>
                 <button id="customer-app-show-selected" class="secondary-action" type="button">הצג נבחרים</button>
+                <span id="customer-app-product-import-status" class="muted-note"></span>
               </div>
               <div class="table-wrap"><table id="customer-app-products-table"></table></div>
             </div>

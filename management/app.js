@@ -152,17 +152,18 @@ const salesColumns = {
 const productColumns = {
   sku: ['מק"ט', "מקט"],
   barcode: ["ברקוד", "בר קוד", "קוד ברקוד", "ברקוד מוצר", "ברקוד פריט", "barcode", "bar code", "Barcode", "BARCODE", "EAN", "ean", "EAN13", "EAN-13", "UPC", "GTIN"],
-  image_url: ["תמונה", "קישור תמונה", "כתובת תמונה", "image_url", "image", "Image"],
-  description: ["תאור", "תיאור"],
-  category: ["תאור משפחה", "תיאור משפחה"],
+  image_url: ["תמונה", "קישור תמונה", "קישור לתמונה", "כתובת תמונה", "image_url", "image", "Image"],
+  description: ["תאור", "תיאור", "תאור מוצר", "תיאור מוצר"],
+  category: ["תאור משפחה", "תיאור משפחה", "קטגוריה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
   purchase_price: ["מחיר קניה אחרון", "מחיר קניה", "מחיר קנייה"],
-  base_price: ["מחיר מחירון בסיס"],
+  base_price: ["מחיר מחירון בסיס", "מחיר מכירה"],
   sale_price: ["מחיר מבצע", "מחיר לאחר הנחה", "מחיר מכירה מבצע"],
   promo_discount_percent: ["אחוז הנחה", "% הנחה", "הנחה %", "הנחה באחוזים"],
   weight: ["משקל"],
-  supplier: ["שם ספק"],
-  pick_order: ["סדר ליקוט", "סדר", "M", "קוד מיון"],
+  hidden: ["פריט לא פעיל", "לא פעיל", "מוסתר ללקוחות", "מוסתר"],
+  supplier: ["שם ספק", "שם הספק", "ספק"],
+  pick_order: ["סדר ליקוט", "מיקום הפריט בסדר הליקוט", "סדר", "M", "קוד מיון"],
   units_per_carton: ["יחידות בקרטון", "כמות בקרטון", "יח' בקרטון", "מספר יחידות בקרטון"],
 };
 
@@ -503,9 +504,13 @@ function bindEvents() {
   document.getElementById("load-customer-app-customer").addEventListener("click", loadCustomerAppCustomer);
   document.getElementById("save-customer-app-customer").addEventListener("click", saveCustomerAppCustomer);
   document.getElementById("customer-app-customer-query").addEventListener("input", debounce(renderCustomerAppCustomers, 200));
+  document.getElementById("import-customer-app-customers").addEventListener("click", () => document.getElementById("customer-app-customers-file").click());
+  document.getElementById("customer-app-customers-file").addEventListener("change", importCustomerAppCustomersFile);
   ["customer-app-product-query", "customer-app-product-supplier", "customer-app-product-category"].forEach((id) => {
     document.getElementById(id).addEventListener("input", () => renderCustomerAppProducts());
   });
+  document.getElementById("import-customer-app-products").addEventListener("click", () => document.getElementById("customer-app-products-file").click());
+  document.getElementById("customer-app-products-file").addEventListener("change", importCustomerAppProductsFile);
   document.getElementById("customer-app-hide-selected").addEventListener("click", () => setSelectedCustomerAppProductsHidden(true));
   document.getElementById("customer-app-show-selected").addEventListener("click", () => setSelectedCustomerAppProductsHidden(false));
   document.querySelectorAll("[data-customer-app-tab]").forEach((button) => button.addEventListener("click", () => showCustomerAppTab(button.dataset.customerAppTab)));
@@ -741,6 +746,36 @@ function readWorkbookAllSheets(file) {
   });
 }
 
+function fixedRowsToObjects(rows, headers) {
+  const firstDataIndex = rows.findIndex((row) => row.some((value) => text(value)));
+  if (firstDataIndex < 0) return [];
+  const firstRow = rows[firstDataIndex] || [];
+  const firstRowLooksLikeHeader = firstRow.some((value) => headers.map(normalizeHeader).includes(normalizeHeader(value)));
+  const dataRows = rows.slice(firstRowLooksLikeHeader ? firstDataIndex + 1 : firstDataIndex);
+  return dataRows
+    .filter((row) => row.some((value) => text(value)))
+    .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
+}
+
+function fixedProductRows(rows) {
+  return fixedRowsToObjects(rows, [
+    "מקט",
+    "ברקוד",
+    "תאור מוצר",
+    "קטגוריה",
+    "עלות תקן",
+    "לא רלוונטי 1",
+    "מחיר מכירה",
+    "משקל",
+    "פריט לא פעיל",
+    "שם ספק",
+    "לא רלוונטי 2",
+    "לא רלוונטי 3",
+    "סדר ליקוט",
+    "קישור תמונה",
+  ]);
+}
+
 function importSalesRows(rows) {
   const now = new Date().toISOString();
   const defaultDate = toSqlDate(new Date());
@@ -813,16 +848,44 @@ function importProductRows(rows) {
       supplier: text(mapped.supplier),
       pick_order: pickOrderValue(row, mapped),
       units_per_carton: number(mapped.units_per_carton) || 1,
+      hidden: inactiveFlag(mapped.hidden),
       updated_at: now,
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
     const savedFlags = existingProductFlags.get(product.sku) || { hidden: 0, customer_recommended: 0 };
-    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, savedFlags.hidden, savedFlags.customer_recommended, now]);
+    const hiddenValue = text(mapped.hidden) ? product.hidden : savedFlags.hidden;
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, hiddenValue, savedFlags.customer_recommended, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
   return [...new Map(products.map((product) => [product.sku, product])).values()];
+}
+
+async function importCustomerAppProductsFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("customer-app-product-import-status");
+  try {
+    status.textContent = "קורא קובץ מוצרים...";
+    const sheets = await readWorkbookAllSheets(file);
+    const rows = fixedProductRows(sheets[0]?.rows || []);
+    const importedProducts = importProductRows(rows);
+    await importProductsToPostgres(importedProducts);
+    state.invoiceProductIndex = null;
+    const persisted = await persistDatabase();
+    await refreshAll();
+    status.textContent = persisted.server.ok
+      ? `נטענו ${integer(importedProducts.length)} מוצרים`
+      : `נטענו ${integer(importedProducts.length)} מוצרים ונשמר בדפדפן בלבד`;
+    showCustomerAppTab("products");
+  } catch (error) {
+    console.error(error);
+    status.textContent = "שגיאה בייבוא המוצרים";
+    alert(`שגיאה בייבוא מוצרים:\n${error.message || "יש לבדוק את מבנה הקובץ."}`);
+  } finally {
+    event.target.value = "";
+  }
 }
 
 async function importProductsToPostgres(products) {
@@ -856,6 +919,30 @@ async function importCallCustomersFile(event) {
     console.error(error);
     document.getElementById("calls-import-status").textContent = "שגיאה בטעינת לקוחות";
     alert("לא הצלחתי לטעון את קובץ הלקוחות לשיחות. יש לבדוק עמודות מספר לקוח ושם לקוח.");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function importCustomerAppCustomersFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("customer-app-customer-status");
+  try {
+    status.textContent = "קורא קובץ לקוחות...";
+    const sheets = await readWorkbookAllSheets(file);
+    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1));
+    await importCallCustomerProfilesToPostgres(importedProfiles);
+    await persistDatabase();
+    await renderCalls();
+    renderCustomerAppCustomers();
+    refreshCallCustomerSelect();
+    status.textContent = `נטענו ${integer(importedProfiles.length)} לקוחות`;
+    showCustomerAppTab("customers");
+  } catch (error) {
+    console.error(error);
+    status.textContent = "שגיאה בייבוא לקוחות";
+    alert(`שגיאה בייבוא לקוחות:\n${error.message || "יש לבדוק את מבנה הקובץ."}`);
   } finally {
     event.target.value = "";
   }
@@ -946,7 +1033,30 @@ function parseCallCustomerSheet(rows) {
     const values = row.map((value) => normalizeHeader(value));
     return values.some((value) => ["מספרלקוח", "קוד", "קודלקוח"].includes(value)) && values.includes("שםלקוח");
   });
-  if (headerIndex < 0) return { rows: [] };
+  if (headerIndex < 0) {
+    return {
+      rows: fixedRowsToObjects(rows, [
+        "מספר לקוח",
+        "שם לקוח",
+        "שם איש קשר",
+        "טלפון",
+        "עיר",
+        "כתובת",
+        "חפ",
+        "יום הזמנה",
+      ]).map((row) => ({
+        customer_no: text(row["מספר לקוח"]),
+        customer_name: text(row["שם לקוח"]),
+        contact: text(row["שם איש קשר"]),
+        phone: text(row["טלפון"]),
+        phone2: "",
+        city: text(row["עיר"]),
+        address: text(row["כתובת"]),
+        company_id: text(row["חפ"]),
+        days: text(row["יום הזמנה"]),
+      })).filter((row) => row.customer_no || row.customer_name),
+    };
+  }
   const headers = rows[headerIndex].map((value) => normalizeHeader(value));
   const indexFor = (...names) => {
     const normalized = names.map(normalizeHeader);
@@ -961,7 +1071,7 @@ function parseCallCustomerSheet(rows) {
     city: indexFor("עיר"),
     address: indexFor("כתובת", "כתובת לקוח", "מען"),
     company_id: indexFor("ח.פ", "ח״פ", "חפ", "ח.פ.", "מס חפ", "מספר חפ", "מספר ח.פ", "מספר ח.פ.", "ע.מ", "עמ", "עוסק", "עוסק מורשה", "מספר עוסק", "מספר עוסק מורשה", "company_id"),
-    days: indexFor("ימי שיחה", "יום שיחה", "יום", "ימים"),
+    days: indexFor("ימי שיחה", "יום שיחה", "יום הזמנה", "יום", "ימים"),
   };
   if (indexes.company_id < 0 && headers[6] && /(חפ|עוסק|עמ)/.test(headers[6])) indexes.company_id = 6;
   const valueAt = (row, key) => indexes[key] >= 0 ? text(row[indexes[key]]) : "";
@@ -983,6 +1093,10 @@ function normalizeCallDays(value) {
   const raw = String(value || "");
   const compact = raw.replace(/[״"]/g, "").replace(/\s+/g, " ").trim();
   const days = new Set();
+  compact.split(/[,\s/;-]+/).forEach((part) => {
+    const dayNumber = Number(part);
+    if (dayNumber >= 1 && dayNumber <= CALL_DAYS.length) days.add(CALL_DAYS[dayNumber - 1]);
+  });
   CALL_DAYS.forEach((day) => {
     if (compact.includes(day) || compact.includes(`יום ${day}`)) days.add(day);
   });
@@ -5358,6 +5472,13 @@ function dbFlag(value) {
   if (value === false || value === 0 || value === null || value === undefined) return false;
   const normalized = String(value).trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function inactiveFlag(value) {
+  if (value === null || value === undefined || text(value) === "") return 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (["0", "false", "no", "לא", "פעיל"].includes(normalized)) return 0;
+  return dbFlag(value) || /x|v|כן|לא פעיל|מוסתר|inactive|hidden/.test(normalized) ? 1 : 0;
 }
 
 function quantityNumber(value) {
