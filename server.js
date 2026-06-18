@@ -1045,6 +1045,26 @@ function ensureServerColumn(db, table, column, definition) {
   if (!columns.includes(column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
+function ensureServerCustomerPortalSchema(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS customer_call_profiles (
+      customer_no TEXT PRIMARY KEY,
+      customer_name TEXT,
+      contact TEXT,
+      phone TEXT,
+      phone2 TEXT,
+      city TEXT,
+      address TEXT,
+      company_id TEXT,
+      terms_accepted_at TEXT,
+      customer_type TEXT DEFAULT 'existing',
+      days TEXT,
+      source TEXT DEFAULT 'calls',
+      updated_at TEXT
+    );
+  `);
+}
+
 function sqliteRows(db, sql, params = []) {
   const result = db.exec(sql, params);
   if (!result.length) return [];
@@ -1377,6 +1397,7 @@ async function withCurrentDatabase(callback) {
 
 async function findCustomerProfile(customerNo) {
   return withCurrentDatabase((db) => {
+    ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
@@ -1456,6 +1477,7 @@ async function handleCustomerRegister(payload, res) {
   const data = await readCurrentDatabaseBuffer();
   const db = new SQL.Database(new Uint8Array(data));
   try {
+    ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
@@ -1489,18 +1511,7 @@ async function handleCustomerRegister(payload, res) {
       };
       await postgresUpsert("customer_call_profiles", [postgresProfile], "customer_no");
     } catch (error) {
-      if (!/terms_accepted_at|customer_type|schema cache|column/i.test(error.message || "")) throw error;
-      const fallbackProfile = {
-        customer_no: profile.customer_no,
-        customer_name: profile.customer_name,
-        phone: profile.phone,
-        address: profile.address,
-        company_id: profile.company_id,
-        call_days: "",
-        source: profile.source,
-        updated_at: profile.updated_at,
-      };
-      await postgresUpsert("customer_call_profiles", [fallbackProfile], "customer_no");
+      console.error("customer registration postgres mirror failed", error);
     }
   }
 
@@ -1530,6 +1541,7 @@ async function handleCustomerTerms(payload, req, res) {
   const db = new SQL.Database(new Uint8Array(data));
   let profile = null;
   try {
+    ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
     db.run("UPDATE customer_call_profiles SET terms_accepted_at = ?, updated_at = ? WHERE customer_no = ?", [now, now, session.customer_no]);
@@ -1616,6 +1628,8 @@ async function handleCustomerProducts(req, res) {
       columns.has("weight") ? "p.weight" : "0 AS weight",
       columns.has("barcode") ? "p.barcode" : "'' AS barcode",
       columns.has("image_url") ? "p.image_url" : "'' AS image_url",
+      columns.has("hidden") ? "p.hidden" : "0 AS hidden",
+      columns.has("customer_recommended") ? "p.customer_recommended" : "0 AS customer_recommended",
       "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
       "COALESCE(gu.global_quantity, 0) AS global_quantity",
     ].join(", ");
@@ -1635,13 +1649,15 @@ async function handleCustomerProducts(req, res) {
       ORDER BY COALESCE(cu.customer_quantity, 0) DESC, COALESCE(gu.global_quantity, 0) DESC, p.description ASC
       LIMIT 3000
     `, hasCustomerSummary || hasSalesRaw ? [session.customer_no] : []);
-    const suppliers = [...new Set(all.map((row) => String(row.supplier || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
-    const categories = [...new Set(all.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
-    const rankBySku = new Map(all
+    const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);
+    const suppliers = [...new Set(visibleProducts.map((row) => String(row.supplier || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const rankBySku = new Map(visibleProducts
       .slice()
       .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
       .map((row, index) => [String(row.sku || ""), index + 1]));
-    const filtered = all
+    const hasRecommendedProducts = visibleProducts.some((candidate) => numberValue(candidate.customer_quantity) > 0 || numberValue(candidate.customer_recommended) > 0);
+    const filtered = visibleProducts
       .filter((row) => {
         if (!query) return true;
         return [row.sku, row.description, row.category, row.supplier, row.barcode]
@@ -1649,7 +1665,7 @@ async function handleCustomerProducts(req, res) {
       })
       .filter((row) => !supplier || String(row.supplier || "") === supplier)
       .filter((row) => !category || String(row.category || "") === category)
-      .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || !all.some((candidate) => numberValue(candidate.customer_quantity) > 0))
+      .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0 || !hasRecommendedProducts)
       .filter((row) => section !== "deals" || productPromoPrice(row) > 0)
       .slice(0, limit)
       .map((row) => {
@@ -1668,7 +1684,7 @@ async function handleCustomerProducts(req, res) {
           standard_cost: numberValue(row.standard_cost),
           weight: numberValue(row.weight),
           image_url: String(row.image_url || ""),
-          customer_recommended: numberValue(row.customer_quantity) > 0,
+          customer_recommended: numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0,
           popularity_label: numberValue(row.global_quantity) <= 0
             ? ""
             : (rankBySku.get(String(row.sku || "")) <= 10 ? "Top 10" : (rankBySku.get(String(row.sku || "")) <= 100 ? "Top 100" : "")),
@@ -1678,7 +1694,7 @@ async function handleCustomerProducts(req, res) {
       rows: filtered,
       suppliers,
       categories,
-      hasCustomerHistory: all.some((row) => numberValue(row.customer_quantity) > 0),
+      hasCustomerHistory: visibleProducts.some((row) => numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0),
     };
   });
 
@@ -1696,6 +1712,9 @@ async function handleCustomerOrder(payload, req, res) {
   const quantities = new Map(inputItems
     .map((item) => [String(item?.sku || "").trim(), numberValue(item?.quantity)])
     .filter(([sku, quantity]) => sku && quantity > 0));
+  const itemNotes = new Map(inputItems
+    .map((item) => [String(item?.sku || "").trim(), String(item?.note || "").trim()])
+    .filter(([sku]) => sku));
   if (!quantities.size) {
     sendJson(res, 400, { ok: false, error: "empty order" });
     return;
@@ -1736,7 +1755,7 @@ async function handleCustomerOrder(payload, req, res) {
       product_desc: String(product.description || sku),
       quantity,
       picked_quantity: 0,
-      note: "",
+      note: itemNotes.get(sku) || "",
       item_status: "pending",
       entry_sequence: index + 1,
       is_carton: 0,

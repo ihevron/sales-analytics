@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618g" />
-    <script defer src="./customer.js?v=20260618g"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618h" />
+    <script defer src="./customer.js?v=20260618h"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -52,7 +52,7 @@
             </label>
             <label class="checkbox-line">
               <input id="new-terms" type="checkbox" required />
-              <span>קראתי ואני מאשר/ת את תנאי השימוש והתנאים הכלליים.</span>
+              <span>קראתי ואני מאשר/ת את תנאי השימוש והתנאים הכלליים. <button id="show-register-terms" class="terms-link-button" type="button">צפייה בתנאים</button></span>
             </label>
             <button type="submit">פתיחת הזמנה ראשונה</button>
           </form>
@@ -131,6 +131,7 @@
 
       <section id="terms-modal" class="terms-modal" hidden aria-label="אישור תנאי שימוש">
         <div class="terms-card">
+          <button id="terms-close" class="cart-close terms-close" type="button" aria-label="סגירת תנאים">×</button>
           <h2>אישור תנאי שימוש</h2>
           <div class="terms-copy">
             <h3>תנאי שימוש</h3>

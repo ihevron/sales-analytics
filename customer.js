@@ -48,6 +48,7 @@ const state = {
   hasCustomerHistory: false,
   quantitySku: "",
   loginMode: "existing",
+  termsMode: "customer",
   settings: { ...DEFAULT_CUSTOMER_SETTINGS },
 };
 
@@ -78,6 +79,8 @@ async function init() {
   document.getElementById("cart-fab").addEventListener("click", openCart);
   document.getElementById("close-cart").addEventListener("click", closeCart);
   document.getElementById("cart-backdrop").addEventListener("click", closeCart);
+  document.getElementById("show-register-terms").addEventListener("click", () => showTermsModal("register"));
+  document.getElementById("terms-close").addEventListener("click", closeTermsModal);
   document.getElementById("close-quantity-sheet").addEventListener("click", closeQuantitySheet);
   document.getElementById("quantity-apply").addEventListener("click", applyQuantitySheet);
   document.getElementById("quantity-minus").addEventListener("click", () => adjustQuantitySheet(-1));
@@ -242,8 +245,8 @@ async function registerCustomer(event) {
     });
     message.textContent = "";
     await handleAuthSuccess(data);
-  } catch {
-    message.textContent = "לא ניתן לפתוח לקוח חדש כרגע. יש לוודא שמילאת שם עסק, ח.פ, טלפון ואישור תנאים.";
+  } catch (error) {
+    message.textContent = error.message || "לא ניתן לפתוח לקוח חדש כרגע. יש לוודא שמילאת שם עסק, ח.פ, טלפון ואישור תנאים.";
   }
 }
 
@@ -261,11 +264,13 @@ function logout() {
   renderCart();
 }
 
-function showTermsModal() {
+function showTermsModal(mode = "customer") {
+  state.termsMode = mode;
   document.getElementById("terms-modal").hidden = false;
   document.body.classList.add("terms-open");
   document.getElementById("terms-accept").checked = false;
   document.getElementById("terms-confirm").disabled = true;
+  document.getElementById("terms-confirm").textContent = mode === "register" ? "אישור תנאים" : "אישור והמשך להזמנה";
   document.getElementById("terms-message").textContent = "";
 }
 
@@ -278,6 +283,11 @@ async function acceptTerms() {
   const message = document.getElementById("terms-message");
   if (!document.getElementById("terms-accept").checked) {
     message.textContent = "יש לאשר את תנאי השימוש כדי להמשיך";
+    return;
+  }
+  if (state.termsMode === "register") {
+    document.getElementById("new-terms").checked = true;
+    closeTermsModal();
     return;
   }
   message.textContent = "שומר אישור...";
@@ -375,7 +385,7 @@ function renderProducts() {
   grid.innerHTML = state.products.map((product) => {
     const quantity = state.cart[product.sku]?.quantity || 0;
     const image = product.image_url || FALLBACK_IMAGE;
-    const badge = product.popularity_label || (product.customer_recommended ? "מומלץ עבורך" : "");
+    const badge = product.customer_recommended ? "מומלץ עבורך" : (product.popularity_label || "");
     const badgeClass = badge === "Top 10" ? "top10" : (badge === "Top 100" ? "top100" : "recommended");
     return `
       <article class="product-card">
@@ -392,6 +402,7 @@ function renderProducts() {
             </select>
             <button type="button" data-action="plus" aria-label="הוספה">+</button>
           </div>
+          ${quantity > 0 ? `<textarea class="item-note-input" data-item-note="${escapeHtml(product.sku)}" rows="2" placeholder="הערה לפריט">${escapeHtml(state.cart[product.sku]?.note || "")}</textarea>` : ""}
         </div>
       </article>
     `;
@@ -401,6 +412,9 @@ function renderProducts() {
     row.querySelector('[data-action="minus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) - 1));
     row.querySelector('[data-action="plus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) + 1));
     row.querySelector('[data-action="quantity-select"]').addEventListener("change", (event) => setQuantity(sku, Number(event.target.value) || 0));
+  });
+  grid.querySelectorAll("[data-item-note]").forEach((textarea) => {
+    textarea.addEventListener("input", () => updateItemNote(textarea.dataset.itemNote, textarea.value, false));
   });
 }
 
@@ -442,7 +456,7 @@ function setQuantity(sku, quantity) {
   if (nextQuantity <= 0) {
     delete state.cart[sku];
   } else {
-    state.cart[sku] = { quantity: nextQuantity, product };
+    state.cart[sku] = { quantity: nextQuantity, product, note: state.cart[sku]?.note || "" };
   }
   saveCart();
   renderCart();
@@ -525,13 +539,22 @@ function saveCart() {
 
 function cartItems() {
   return Object.entries(state.cart)
-    .map(([sku, item]) => ({ sku, quantity: Number(item.quantity) || 0, product: item.product }))
+    .map(([sku, item]) => ({ sku, quantity: Number(item.quantity) || 0, product: item.product, note: item.note || "" }))
     .filter((item) => item.quantity > 0);
 }
 
 function openCart() {
-  document.body.classList.add("cart-open");
-  document.getElementById("cart-backdrop").hidden = false;
+  const mobileCart = window.matchMedia("(max-width: 1100px)").matches;
+  if (mobileCart) {
+    document.body.classList.add("cart-open");
+    document.getElementById("cart-backdrop").hidden = false;
+    return;
+  }
+  const panel = document.getElementById("cart-panel");
+  document.getElementById("cart-backdrop").hidden = true;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  panel.classList.add("cart-panel-highlight");
+  setTimeout(() => panel.classList.remove("cart-panel-highlight"), 1400);
 }
 
 function closeCart() {
@@ -553,6 +576,7 @@ function renderCart() {
         <div>
           <strong>${escapeHtml(item.product?.description || item.sku)}</strong>
           <small>${integer(item.quantity)} יח׳ · ${money((item.product?.price || 0) * item.quantity)}</small>
+          <textarea class="cart-item-note" data-cart-note="${escapeHtml(item.sku)}" rows="2" placeholder="הערה לפריט">${escapeHtml(item.note || "")}</textarea>
         </div>
         <div class="cart-item-actions">
           <button type="button" data-cart-minus="${escapeHtml(item.sku)}" aria-label="הפחתת כמות">−</button>
@@ -566,6 +590,9 @@ function renderCart() {
     list.querySelectorAll("[data-cart-plus]").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.cartPlus, (state.cart[button.dataset.cartPlus]?.quantity || 0) + 1)));
     list.querySelectorAll("[data-cart-picker]").forEach((button) => button.addEventListener("click", () => openQuantitySheet(button.dataset.cartPicker)));
     list.querySelectorAll(".cart-remove").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.sku, 0)));
+    list.querySelectorAll("[data-cart-note]").forEach((textarea) => {
+      textarea.addEventListener("input", () => updateItemNote(textarea.dataset.cartNote, textarea.value, false));
+    });
   }
 
   const subtotal = items.reduce((sum, item) => sum + ((Number(item.product?.price) || 0) * item.quantity), 0);
@@ -587,7 +614,7 @@ async function submitOrder() {
       method: "POST",
       body: JSON.stringify({
         note: document.getElementById("order-note").value.trim(),
-        items: items.map((item) => ({ sku: item.sku, quantity: item.quantity })),
+        items: items.map((item) => ({ sku: item.sku, quantity: item.quantity, note: item.note || "" })),
       }),
     });
     state.cart = {};
@@ -603,6 +630,13 @@ async function submitOrder() {
   } finally {
     button.disabled = !cartItems().length;
   }
+}
+
+function updateItemNote(sku, note, rerenderCart) {
+  if (!state.cart[sku]) return;
+  state.cart[sku].note = String(note || "").slice(0, 500);
+  saveCart();
+  if (rerenderCart) renderCart();
 }
 
 function escapeHtml(value) {

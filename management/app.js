@@ -284,6 +284,8 @@ function createSharedSchema() {
       supplier TEXT,
       pick_order REAL DEFAULT 999999,
       units_per_carton REAL DEFAULT 1,
+      hidden INTEGER NOT NULL DEFAULT 0,
+      customer_recommended INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sales_recommendations (
@@ -379,6 +381,8 @@ function createManagementSchema() {
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   ensureColumn("products", "pick_order", "REAL DEFAULT 999999");
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
+  ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
   ensureColumn("customer_calls", "whatsapp_sent_at", "TEXT");
   ensureColumn("customer_calls", "manual_order_id", "INTEGER");
@@ -502,6 +506,8 @@ function bindEvents() {
   ["customer-app-product-query", "customer-app-product-supplier", "customer-app-product-category"].forEach((id) => {
     document.getElementById(id).addEventListener("input", () => renderCustomerAppProducts());
   });
+  document.getElementById("customer-app-hide-selected").addEventListener("click", () => setSelectedCustomerAppProductsHidden(true));
+  document.getElementById("customer-app-show-selected").addEventListener("click", () => setSelectedCustomerAppProductsHidden(false));
   document.querySelectorAll("[data-customer-app-tab]").forEach((button) => button.addEventListener("click", () => showCustomerAppTab(button.dataset.customerAppTab)));
   document.querySelectorAll(".report-tabs [data-screen]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.screen)));
   document.getElementById("customer-search-button").addEventListener("click", searchCustomers);
@@ -762,10 +768,17 @@ function importSalesRows(rows) {
 function importProductRows(rows) {
   const now = new Date().toISOString();
   const products = [];
+  ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  const existingProductFlags = new Map(queryRows("SELECT sku, hidden, customer_recommended FROM products")
+    .map((row) => [String(row.sku || ""), {
+      hidden: number(row.hidden) ? 1 : 0,
+      customer_recommended: number(row.customer_recommended) ? 1 : 0,
+    }]));
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, pick_order, units_per_carton, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, pick_order, units_per_carton, hidden, customer_recommended, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
       barcode = excluded.barcode,
       image_url = excluded.image_url,
@@ -804,7 +817,8 @@ function importProductRows(rows) {
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
-    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
+    const savedFlags = existingProductFlags.get(product.sku) || { hidden: 0, customer_recommended: 0 };
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, savedFlags.hidden, savedFlags.customer_recommended, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
@@ -1365,7 +1379,6 @@ async function renderProducts() {
     { key: "category", label: "קטגוריה" },
     { key: "supplier", label: "ספק" },
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
-    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
@@ -1399,7 +1412,6 @@ function renderProductsTable(rows) {
     { key: "category", label: "קטגוריה" },
     { key: "supplier", label: "ספק" },
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
-    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
@@ -1453,7 +1465,6 @@ function renderProductComparison() {
     { key: "category", label: "קטגוריה" },
     { key: "supplier", label: "ספק" },
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
-    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "returns_percent", label: "% חזרות", render: returnPercentCell },
     { key: "quantity", label: "כמות 6 חודשים", format: numberDisplay },
@@ -4899,10 +4910,11 @@ function renderCustomerAppPromotions() {
   const table = document.getElementById("customer-app-promotions-table");
   if (!table) return;
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   const rows = queryRows(`
-    SELECT sku, description, supplier, category, base_price AS sale_price, sale_price AS promo_price, promo_discount_percent
+    SELECT sku, description, supplier, category, base_price AS sale_price, sale_price AS promo_price, promo_discount_percent, customer_recommended
     FROM products
-    WHERE COALESCE(sale_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0
+    WHERE COALESCE(sale_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0 OR COALESCE(customer_recommended, 0) > 0
     ORDER BY updated_at DESC, description ASC
     LIMIT 50
   `);
@@ -4914,8 +4926,10 @@ function renderCustomerAppPromotions() {
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
+    { key: "customer_recommended", label: "מומלץ", render: (row) => recommendationStateLabel(row.customer_recommended) },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
       <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">עריכה</button>
+      <button class="small-action" data-toggle-customer-app-recommended="${escapeHtml(row.sku)}">${number(row.customer_recommended) ? "בטל מומלץ" : "סמן מומלץ"}</button>
       <button class="danger-action" data-remove-customer-app-promo="${escapeHtml(row.sku)}">הסרה</button>
     ` },
   ], "customer-app-promotions", "description", "asc");
@@ -4924,6 +4938,9 @@ function renderCustomerAppPromotions() {
   });
   document.querySelectorAll("[data-remove-customer-app-promo]").forEach((button) => {
     button.addEventListener("click", () => removeCustomerAppPromotion(button.dataset.removeCustomerAppPromo));
+  });
+  document.querySelectorAll("[data-toggle-customer-app-recommended]").forEach((button) => {
+    button.addEventListener("click", () => toggleCustomerAppProductRecommended(button.dataset.toggleCustomerAppRecommended));
   });
 }
 
@@ -5138,16 +5155,19 @@ function renderCustomerAppProducts() {
   const table = document.getElementById("customer-app-products-table");
   if (!table) return;
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   const query = `%${text(document.getElementById("customer-app-product-query")?.value)}%`;
   const supplier = document.getElementById("customer-app-product-supplier")?.value || "";
   const category = document.getElementById("customer-app-product-category")?.value || "";
   const rows = queryRows(`
     SELECT sku, description, category, supplier, standard_cost,
-      standard_cost AS purchase_price,
       base_price AS sale_price,
       sale_price AS promo_price,
       promo_discount_percent,
-      weight
+      weight,
+      hidden,
+      customer_recommended
     FROM products
     WHERE (sku LIKE ? OR description LIKE ?)
       AND (? = '' OR supplier = ?)
@@ -5156,23 +5176,93 @@ function renderCustomerAppProducts() {
     LIMIT 700
   `, [query, query, supplier, supplier, category, category]);
   renderTable("customer-app-products-table", rows, [
+    { key: "select", label: '<input id="customer-app-select-all-products" class="table-check" type="checkbox" aria-label="בחר הכל" />', sortable: false, render: (row) => `
+      <input class="table-check customer-app-product-check" type="checkbox" data-customer-app-product-select="${escapeHtml(row.sku)}" aria-label="בחר מוצר" />
+    ` },
     { key: "sku", label: "מק״ט" },
     { key: "description", label: "תיאור" },
     { key: "category", label: "קטגוריה" },
     { key: "supplier", label: "ספק" },
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
-    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
     { key: "weight", label: "משקל", format: numberDisplay },
+    { key: "hidden", label: "תצוגה", render: (row) => visibilityStateLabel(row.hidden) },
+    { key: "customer_recommended", label: "מומלץ", render: (row) => recommendationStateLabel(row.customer_recommended) },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action icon-action" data-toggle-customer-app-hidden="${escapeHtml(row.sku)}" title="${number(row.hidden) ? "הצג מוצר" : "הסתר מוצר"}">${number(row.hidden) ? "👁" : "⊘"}</button>
+      <button class="small-action" data-toggle-customer-app-recommended="${escapeHtml(row.sku)}">${number(row.customer_recommended) ? "בטל מומלץ" : "סמן מומלץ"}</button>
       <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">הגדרת מבצע</button>
     ` },
   ], "customer-app-products", "description", "asc");
+  document.getElementById("customer-app-select-all-products")?.addEventListener("change", (event) => {
+    document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]").forEach((checkbox) => {
+      checkbox.checked = event.target.checked;
+    });
+  });
+  document.querySelectorAll("#customer-app-products-table [data-toggle-customer-app-hidden]").forEach((button) => {
+    button.addEventListener("click", () => toggleCustomerAppProductHidden(button.dataset.toggleCustomerAppHidden));
+  });
+  document.querySelectorAll("#customer-app-products-table [data-toggle-customer-app-recommended]").forEach((button) => {
+    button.addEventListener("click", () => toggleCustomerAppProductRecommended(button.dataset.toggleCustomerAppRecommended));
+  });
   document.querySelectorAll("#customer-app-products-table [data-edit-customer-app-promo]").forEach((button) => {
     button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
   });
+}
+
+function selectedCustomerAppProductSkus() {
+  return Array.from(document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]:checked"))
+    .map((checkbox) => checkbox.dataset.customerAppProductSelect)
+    .filter(Boolean);
+}
+
+async function setSelectedCustomerAppProductsHidden(hidden) {
+  const skus = selectedCustomerAppProductSkus();
+  if (!skus.length) {
+    alert("יש לבחור לפחות מוצר אחד");
+    return;
+  }
+  await setCustomerAppProductsHidden(skus, hidden);
+}
+
+async function toggleCustomerAppProductHidden(sku) {
+  const row = firstRow("SELECT hidden FROM products WHERE sku = ?", [sku]);
+  await setCustomerAppProductsHidden([sku], !number(row.hidden));
+}
+
+async function setCustomerAppProductsHidden(skus, hidden) {
+  ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+  const placeholders = skus.map(() => "?").join(",");
+  state.db.run(`UPDATE products SET hidden = ?, updated_at = ? WHERE sku IN (${placeholders})`, [
+    hidden ? 1 : 0,
+    new Date().toISOString(),
+    ...skus,
+  ]);
+  await persistDatabase();
+  renderCustomerAppProducts();
+}
+
+async function toggleCustomerAppProductRecommended(sku) {
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  const row = firstRow("SELECT customer_recommended FROM products WHERE sku = ?", [sku]);
+  state.db.run("UPDATE products SET customer_recommended = ?, updated_at = ? WHERE sku = ?", [
+    number(row.customer_recommended) ? 0 : 1,
+    new Date().toISOString(),
+    sku,
+  ]);
+  await persistDatabase();
+  renderCustomerAppPromotions();
+  renderCustomerAppProducts();
+}
+
+function visibilityStateLabel(value) {
+  return number(value) ? '<span class="visibility-pill hidden-product">מוסתר</span>' : '<span class="visibility-pill visible-product">מוצג</span>';
+}
+
+function recommendationStateLabel(value) {
+  return number(value) ? '<span class="recommendation-pill">מומלץ עבורך</span>' : "";
 }
 
 function resetRecommendationForm() {

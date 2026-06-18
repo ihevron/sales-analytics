@@ -270,6 +270,41 @@ button { cursor: pointer; }
 
 .customer-app-toolbar {
   margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.table-check {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--primary);
+}
+
+.visibility-pill,
+.recommendation-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visibility-pill.visible-product,
+.recommendation-pill {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.visibility-pill.hidden-product {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.icon-action {
+  min-width: 38px;
+  padding-inline: 8px;
+  font-size: 16px;
 }
 
 .table-wrap {
