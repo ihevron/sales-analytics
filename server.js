@@ -690,6 +690,14 @@ async function handlePostgresCallProfilesImport(payload, res) {
     .filter((row) => row.customer_no && row.customer_name);
 
   if (rows.length) {
+    const customerNos = rows.map((row) => row.customer_no).filter(Boolean);
+    for (let index = 0; index < customerNos.length; index += 150) {
+      const chunk = customerNos.slice(index, index + 150).map((customerNo) => `"${String(customerNo).replaceAll('"', '\\"')}"`).join(",");
+      await postgresRest(`customer_call_profiles?customer_no=in.(${chunk})`, {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
+    }
     await postgresRest("customer_call_profiles?source=eq.calls", {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
