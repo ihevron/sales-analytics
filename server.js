@@ -1407,6 +1407,10 @@ async function handleCustomerProducts(req, res) {
     `, hasCustomerSummary || hasSalesRaw ? [session.customer_no] : []);
     const suppliers = [...new Set(all.map((row) => String(row.supplier || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const categories = [...new Set(all.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const rankBySku = new Map(all
+      .slice()
+      .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
+      .map((row, index) => [String(row.sku || ""), index + 1]));
     const filtered = all
       .filter((row) => {
         if (!query) return true;
@@ -1428,8 +1432,10 @@ async function handleCustomerProducts(req, res) {
         standard_cost: numberValue(row.standard_cost),
         weight: numberValue(row.weight),
         image_url: String(row.image_url || ""),
-        customer_quantity: numberValue(row.customer_quantity),
-        global_quantity: numberValue(row.global_quantity),
+        customer_recommended: numberValue(row.customer_quantity) > 0,
+        popularity_label: numberValue(row.global_quantity) <= 0
+          ? ""
+          : (rankBySku.get(String(row.sku || "")) <= 10 ? "Top 10" : (rankBySku.get(String(row.sku || "")) <= 100 ? "Top 100" : "")),
       }));
     return {
       rows: filtered,

@@ -31,6 +31,7 @@ const state = {
   category: "",
   section: "recommended",
   hasCustomerHistory: false,
+  quantitySku: "",
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -52,13 +53,20 @@ function init() {
     loadProducts();
   });
   document.getElementById("submit-order").addEventListener("click", submitOrder);
+  document.getElementById("cart-fab").addEventListener("click", openCart);
+  document.getElementById("close-cart").addEventListener("click", closeCart);
+  document.getElementById("cart-backdrop").addEventListener("click", closeCart);
+  document.getElementById("close-quantity-sheet").addEventListener("click", closeQuantitySheet);
+  document.getElementById("quantity-apply").addEventListener("click", applyQuantitySheet);
+  document.getElementById("quantity-minus").addEventListener("click", () => adjustQuantitySheet(-1));
+  document.getElementById("quantity-plus").addEventListener("click", () => adjustQuantitySheet(1));
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       state.section = button.dataset.section;
-      if (state.section !== "all") state.category = "";
       loadProducts();
     });
   });
+  fillQuantitySelect();
 
   if (state.token && state.customer) {
     showApp();
@@ -144,6 +152,8 @@ function logout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_KEY);
   localStorage.removeItem(CART_KEY);
+  closeCart();
+  closeQuantitySheet();
   showLogin();
   renderCart();
 }
@@ -189,17 +199,6 @@ async function loadProducts() {
 function renderFilters() {
   fillSelect(document.getElementById("supplier-filter"), "כל הספקים", state.suppliers, state.supplier);
   fillSelect(document.getElementById("category-filter"), "כל הקטגוריות", state.categories, state.category);
-  const menu = document.getElementById("category-menu");
-  menu.innerHTML = state.categories.slice(0, 18).map((category) => `
-    <button type="button" class="${state.category === category ? "active" : ""}" data-category="${escapeHtml(category)}">${escapeHtml(category)}</button>
-  `).join("") || `<span>אין קטגוריות</span>`;
-  menu.querySelectorAll("[data-category]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.category = button.dataset.category;
-      state.section = "all";
-      loadProducts();
-    });
-  });
 }
 
 function fillSelect(select, defaultLabel, values, selected) {
@@ -232,20 +231,18 @@ function renderProducts() {
   grid.innerHTML = state.products.map((product) => {
     const quantity = state.cart[product.sku]?.quantity || 0;
     const image = product.image_url || FALLBACK_IMAGE;
-    const popularity = product.customer_quantity > 0
-      ? `נקנה בעבר: ${integer(product.customer_quantity)} יח׳`
-      : (product.global_quantity > 0 ? `פופולרי: ${integer(product.global_quantity)} יח׳` : "");
+    const badge = product.popularity_label || (product.customer_recommended ? "מומלץ עבורך" : "");
     return `
       <article class="product-card">
         <img src="${escapeHtml(image)}" alt="" loading="lazy" onerror="this.src='${FALLBACK_IMAGE}'" />
         <div class="product-info">
           <h3>${escapeHtml(product.description || product.sku)}</h3>
           <div class="product-meta">מק״ט ${escapeHtml(product.sku)}${product.category ? ` · ${escapeHtml(product.category)}` : ""}</div>
-          ${popularity ? `<div class="product-badge">${escapeHtml(popularity)}</div>` : ""}
+          ${badge ? `<div class="product-badge">${escapeHtml(badge)}</div>` : ""}
           <div class="product-price">${money(product.price)}</div>
           <div class="quantity-row" data-sku="${escapeHtml(product.sku)}">
             <button type="button" data-action="minus" aria-label="הפחתה">−</button>
-            <input type="number" min="0" step="1" value="${quantity}" aria-label="כמות" />
+            <button type="button" class="quantity-display" data-action="picker" aria-label="בחירת כמות">${integer(quantity)}</button>
             <button type="button" data-action="plus" aria-label="הוספה">+</button>
           </div>
         </div>
@@ -256,7 +253,7 @@ function renderProducts() {
     const sku = row.dataset.sku;
     row.querySelector('[data-action="minus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) - 1));
     row.querySelector('[data-action="plus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) + 1));
-    row.querySelector("input").addEventListener("change", (event) => setQuantity(sku, Number(event.target.value) || 0));
+    row.querySelector('[data-action="picker"]').addEventListener("click", () => openQuantitySheet(sku));
   });
 }
 
@@ -278,6 +275,42 @@ function setQuantity(sku, quantity) {
   renderProducts();
 }
 
+function fillQuantitySelect() {
+  const select = document.getElementById("quantity-select");
+  select.innerHTML = Array.from({ length: 101 }, (_, value) => `<option value="${value}">${value}</option>`).join("");
+}
+
+function openQuantitySheet(sku) {
+  state.quantitySku = sku;
+  const product = productBySku(sku);
+  if (!product) return;
+  const select = document.getElementById("quantity-select");
+  const quantity = Math.min(100, Math.max(0, state.cart[sku]?.quantity || 0));
+  document.getElementById("quantity-product-name").textContent = product.description || sku;
+  select.value = String(quantity);
+  document.getElementById("quantity-sheet").hidden = false;
+  document.body.classList.add("quantity-open");
+  setTimeout(() => select.focus(), 0);
+}
+
+function closeQuantitySheet() {
+  document.getElementById("quantity-sheet").hidden = true;
+  document.body.classList.remove("quantity-open");
+  state.quantitySku = "";
+}
+
+function adjustQuantitySheet(delta) {
+  const select = document.getElementById("quantity-select");
+  const next = Math.min(100, Math.max(0, Number(select.value || 0) + delta));
+  select.value = String(next);
+}
+
+function applyQuantitySheet() {
+  if (!state.quantitySku) return;
+  setQuantity(state.quantitySku, Number(document.getElementById("quantity-select").value) || 0);
+  closeQuantitySheet();
+}
+
 function saveCart() {
   localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
 }
@@ -288,10 +321,21 @@ function cartItems() {
     .filter((item) => item.quantity > 0);
 }
 
+function openCart() {
+  document.body.classList.add("cart-open");
+  document.getElementById("cart-backdrop").hidden = false;
+}
+
+function closeCart() {
+  document.body.classList.remove("cart-open");
+  document.getElementById("cart-backdrop").hidden = true;
+}
+
 function renderCart() {
   const items = cartItems();
   const list = document.getElementById("cart-list");
   document.getElementById("cart-count").textContent = `${integer(items.length)} פריטים`;
+  document.getElementById("cart-fab-count").textContent = integer(items.reduce((sum, item) => sum + item.quantity, 0));
   document.getElementById("submit-order").disabled = !items.length;
   if (!items.length) {
     list.innerHTML = `<div class="empty-state">הסל ריק</div>`;
@@ -302,12 +346,18 @@ function renderCart() {
           <strong>${escapeHtml(item.product?.description || item.sku)}</strong>
           <small>${integer(item.quantity)} יח׳ · ${money((item.product?.price || 0) * item.quantity)}</small>
         </div>
-        <button class="cart-remove" type="button" data-sku="${escapeHtml(item.sku)}" aria-label="הסרה">×</button>
+        <div class="cart-item-actions">
+          <button type="button" data-cart-minus="${escapeHtml(item.sku)}" aria-label="הפחתת כמות">−</button>
+          <button type="button" data-cart-picker="${escapeHtml(item.sku)}" aria-label="בחירת כמות">${integer(item.quantity)}</button>
+          <button type="button" data-cart-plus="${escapeHtml(item.sku)}" aria-label="הוספת כמות">+</button>
+          <button class="cart-remove" type="button" data-sku="${escapeHtml(item.sku)}" aria-label="הסרה">×</button>
+        </div>
       </div>
     `).join("");
-    list.querySelectorAll(".cart-remove").forEach((button) => {
-      button.addEventListener("click", () => setQuantity(button.dataset.sku, 0));
-    });
+    list.querySelectorAll("[data-cart-minus]").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.cartMinus, (state.cart[button.dataset.cartMinus]?.quantity || 0) - 1)));
+    list.querySelectorAll("[data-cart-plus]").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.cartPlus, (state.cart[button.dataset.cartPlus]?.quantity || 0) + 1)));
+    list.querySelectorAll("[data-cart-picker]").forEach((button) => button.addEventListener("click", () => openQuantitySheet(button.dataset.cartPicker)));
+    list.querySelectorAll(".cart-remove").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.sku, 0)));
   }
 
   const subtotal = items.reduce((sum, item) => sum + ((Number(item.product?.price) || 0) * item.quantity), 0);

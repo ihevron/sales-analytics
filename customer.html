@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618b" />
-    <script defer src="./customer.js?v=20260618b"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618c" />
+    <script defer src="./customer.js?v=20260618c"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -45,10 +45,6 @@
             <button class="nav-pill active" data-section="recommended">המומלצים שלי</button>
             <button class="nav-pill" data-section="deals">מבצעים</button>
             <button class="nav-pill" data-section="all">כל המוצרים</button>
-            <div class="nav-group">
-              <h2>קטגוריות</h2>
-              <div id="category-menu" class="nav-list"></div>
-            </div>
           </aside>
 
           <section class="catalog-panel">
@@ -73,9 +69,10 @@
             <div id="product-grid" class="product-grid" aria-live="polite"></div>
           </section>
 
-          <aside class="cart-panel">
+          <aside id="cart-panel" class="cart-panel" aria-label="סיכום הזמנה">
             <div class="cart-header">
-              <h2>סל הזמנה</h2>
+              <h2>סיכום הזמנה</h2>
+              <button id="close-cart" class="cart-close" type="button" aria-label="סגירת סיכום">×</button>
               <span id="cart-count">0 פריטים</span>
             </div>
             <div id="cart-list" class="cart-list"></div>
@@ -91,6 +88,25 @@
             <button id="submit-order" class="submit-button" disabled>שליחת הזמנה</button>
             <div id="order-message" class="message" role="status"></div>
           </aside>
+        </div>
+
+        <button id="cart-fab" class="cart-fab" type="button" aria-label="פתיחת סיכום הזמנה">
+          <span>סיכום הזמנה</span>
+          <strong id="cart-fab-count">0</strong>
+        </button>
+        <div id="cart-backdrop" class="cart-backdrop" hidden></div>
+      </section>
+
+      <section id="quantity-sheet" class="quantity-sheet" hidden aria-label="בחירת כמות">
+        <div class="quantity-sheet-card">
+          <button id="close-quantity-sheet" class="cart-close" type="button" aria-label="סגירה">×</button>
+          <h2 id="quantity-product-name">בחירת כמות</h2>
+          <div class="quantity-picker">
+            <button id="quantity-minus" type="button">−</button>
+            <select id="quantity-select" size="7" aria-label="כמות"></select>
+            <button id="quantity-plus" type="button">+</button>
+          </div>
+          <button id="quantity-apply" class="submit-button" type="button">עדכון כמות</button>
         </div>
       </section>
     </main>
