@@ -135,6 +135,7 @@ const salesColumns = {
 const productColumns = {
   sku: ['מק"ט', "מקט"],
   barcode: ["ברקוד", "בר קוד", "קוד ברקוד", "ברקוד מוצר", "ברקוד פריט", "barcode", "bar code", "Barcode", "BARCODE", "EAN", "ean", "EAN13", "EAN-13", "UPC", "GTIN"],
+  image_url: ["תמונה", "קישור תמונה", "כתובת תמונה", "image_url", "image", "Image"],
   description: ["תאור", "תיאור"],
   category: ["תאור משפחה", "תיאור משפחה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
@@ -253,6 +254,7 @@ function createSharedSchema() {
     CREATE TABLE IF NOT EXISTS products (
       sku TEXT PRIMARY KEY,
       barcode TEXT,
+      image_url TEXT,
       description TEXT,
       category TEXT,
       standard_cost REAL DEFAULT 0,
@@ -303,6 +305,7 @@ function createManagementSchema() {
       phone2 TEXT,
       city TEXT,
       address TEXT,
+      company_id TEXT,
       days TEXT,
       source TEXT DEFAULT 'calls',
       updated_at TEXT
@@ -348,12 +351,14 @@ function createManagementSchema() {
     CREATE INDEX IF NOT EXISTS idx_order_items_order ON customer_order_items (order_id);
   `);
   ensureColumn("products", "barcode", "TEXT");
+  ensureColumn("products", "image_url", "TEXT");
   ensureColumn("products", "pick_order", "REAL DEFAULT 999999");
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
   ensureColumn("customer_calls", "whatsapp_sent_at", "TEXT");
   ensureColumn("customer_calls", "manual_order_id", "INTEGER");
   ensureColumn("customer_call_profiles", "address", "TEXT");
+  ensureColumn("customer_call_profiles", "company_id", "TEXT");
   ensureColumn("customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
   ensureColumn("customer_orders", "notes", "TEXT");
   ensureColumn("customer_orders", "picked_by", "TEXT");
@@ -704,10 +709,11 @@ function importProductRows(rows) {
   const products = [];
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, barcode, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, image_url, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
       barcode = excluded.barcode,
+      image_url = excluded.image_url,
       description = excluded.description,
       category = excluded.category,
       standard_cost = excluded.standard_cost,
@@ -726,6 +732,7 @@ function importProductRows(rows) {
     const product = {
       sku: text(mapped.sku),
       barcode: barcodeValue(mapped.barcode || inferBarcode(row)),
+      image_url: text(mapped.image_url),
       description: text(mapped.description),
       category: text(mapped.category),
       standard_cost: number(mapped.standard_cost),
@@ -738,7 +745,7 @@ function importProductRows(rows) {
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
-    stmt.run([product.sku, product.barcode, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
@@ -802,13 +809,14 @@ function importCallCustomerSheets(sheets) {
         phone2: text(row.phone2) || existing.phone2 || "",
         city: text(row.city) || existing.city || "",
         address: text(row.address) || existing.address || "",
+        company_id: text(row.company_id) || existing.company_id || "",
         days: [...days],
       });
     });
   });
   const stmt = state.db.prepare(`
-    INSERT INTO customer_call_profiles (customer_no, customer_name, contact, phone, phone2, city, address, days, source, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'calls', ?)
+    INSERT INTO customer_call_profiles (customer_no, customer_name, contact, phone, phone2, city, address, company_id, days, source, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'calls', ?)
     ON CONFLICT(customer_no) DO UPDATE SET
       customer_name = excluded.customer_name,
       contact = excluded.contact,
@@ -816,6 +824,7 @@ function importCallCustomerSheets(sheets) {
       phone2 = excluded.phone2,
       city = excluded.city,
       address = excluded.address,
+      company_id = excluded.company_id,
       days = excluded.days,
       source = 'calls',
       updated_at = excluded.updated_at
@@ -831,6 +840,7 @@ function importCallCustomerSheets(sheets) {
       customer.phone2,
       customer.city,
       customer.address,
+      customer.company_id,
       customer.days.filter((day) => CALL_DAYS.includes(day)).join(","),
       now,
     ]);
@@ -877,6 +887,7 @@ function parseCallCustomerSheet(rows) {
     phone2: indexFor("טלפון נוסף", "נייד נוסף"),
     city: indexFor("עיר"),
     address: indexFor("כתובת", "כתובת לקוח", "מען"),
+    company_id: indexFor("ח.פ", "ח״פ", "חפ", "עוסק מורשה", "מספר עוסק", "מספר ח.פ", "company_id"),
     days: indexFor("ימי שיחה", "יום שיחה", "יום", "ימים"),
   };
   const valueAt = (row, key) => indexes[key] >= 0 ? text(row[indexes[key]]) : "";
@@ -888,6 +899,7 @@ function parseCallCustomerSheet(rows) {
     phone2: valueAt(row, "phone2"),
     city: valueAt(row, "city"),
     address: valueAt(row, "address"),
+    company_id: valueAt(row, "company_id"),
     days: valueAt(row, "days"),
   })).filter((row) => row.customer_no || row.customer_name);
   return { rows: parsedRows };

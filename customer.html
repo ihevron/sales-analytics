@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>הזמנה ללקוח</title>
+    <link rel="icon" type="image/png" href="./management/wa-logo.png" />
+    <link rel="stylesheet" href="./customer.css?v=20260618" />
+    <script defer src="./customer.js?v=20260618"></script>
+  </head>
+  <body>
+    <main class="customer-shell">
+      <section id="login-view" class="login-view">
+        <form id="login-form" class="login-card">
+          <img src="./management/wa-logo.png" alt="" class="login-logo" />
+          <h1>כניסה להזמנה</h1>
+          <p>יש להזין מספר לקוח וח.פ / עוסק מורשה.</p>
+          <label>
+            מספר לקוח
+            <input id="customer-no" type="text" inputmode="numeric" autocomplete="username" required />
+          </label>
+          <label>
+            ח.פ / עוסק מורשה
+            <input id="company-id" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">כניסה</button>
+          <div id="login-message" class="message" role="status"></div>
+        </form>
+      </section>
+
+      <section id="app-view" class="app-view" hidden>
+        <header class="customer-header">
+          <div>
+            <img src="./management/wa-logo.png" alt="" class="header-logo" />
+            <div>
+              <h1>הזמנה מהקטלוג</h1>
+              <p id="customer-name">לקוח</p>
+            </div>
+          </div>
+          <button id="logout-button" class="ghost-button">יציאה</button>
+        </header>
+
+        <div class="catalog-layout">
+          <section class="catalog-panel">
+            <div class="toolbar">
+              <label class="search-box">
+                חיפוש מוצר
+                <input id="product-search" type="search" placeholder="שם מוצר, מק״ט או ברקוד" />
+              </label>
+            </div>
+            <div id="product-grid" class="product-grid" aria-live="polite"></div>
+          </section>
+
+          <aside class="cart-panel">
+            <div class="cart-header">
+              <h2>סל הזמנה</h2>
+              <span id="cart-count">0 פריטים</span>
+            </div>
+            <div id="cart-list" class="cart-list"></div>
+            <label class="order-note">
+              הערה להזמנה
+              <textarea id="order-note" rows="3"></textarea>
+            </label>
+            <div class="summary">
+              <div><span>סה״כ לפני מע״מ</span><strong id="subtotal">₪0.00</strong></div>
+              <div><span>מע״מ 18%</span><strong id="vat">₪0.00</strong></div>
+              <div class="total"><span>סה״כ כולל מע״מ</span><strong id="total">₪0.00</strong></div>
+            </div>
+            <button id="submit-order" class="submit-button" disabled>שליחת הזמנה</button>
+            <div id="order-message" class="message" role="status"></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

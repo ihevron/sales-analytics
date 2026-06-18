@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { createPriceAuditService, isAuthorized: isPriceAuditAuthorized } = require("./price-audit-core");
 
 const root = __dirname;
@@ -19,6 +20,7 @@ const postgresPreviewUrl = normalizeSupabaseUrl(process.env.SUPABASE_POSTGRES_UR
 const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
 const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
+const customerSessionSecret = process.env.CUSTOMER_SESSION_SECRET || supabaseServiceRoleKey || "local-customer-session-secret";
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
@@ -435,6 +437,7 @@ async function handlePostgresProductsImport(payload, res) {
       return {
         sku,
         barcode: String(product.barcode || "").trim(),
+        image_url: String(product.image_url || "").trim(),
         description: String(product.description || "").trim(),
         family_description: category,
         category,
@@ -456,8 +459,16 @@ async function handlePostgresProductsImport(payload, res) {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
     });
-    for (let index = 0; index < rows.length; index += 500) {
-      await postgresUpsert("products", rows.slice(index, index + 500), "sku");
+    try {
+      for (let index = 0; index < rows.length; index += 500) {
+        await postgresUpsert("products", rows.slice(index, index + 500), "sku");
+      }
+    } catch (error) {
+      if (!/image_url|schema cache|column/i.test(error.message || "")) throw error;
+      const rowsWithoutImages = rows.map(({ image_url, ...row }) => row);
+      for (let index = 0; index < rowsWithoutImages.length; index += 500) {
+        await postgresUpsert("products", rowsWithoutImages.slice(index, index + 500), "sku");
+      }
     }
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
@@ -612,6 +623,7 @@ async function handlePostgresCallProfilesImport(payload, res) {
         customer_name: customerName,
         phone,
         address: [...new Set(addressParts)].join(", "),
+        company_id: String(profile.company_id || "").trim(),
         call_days: String(profile.call_days || profile.days || "").trim(),
         source: "calls",
         updated_at: now,
@@ -624,7 +636,12 @@ async function handlePostgresCallProfilesImport(payload, res) {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
     });
-    await postgresUpsert("customer_call_profiles", rows, "customer_no");
+    try {
+      await postgresUpsert("customer_call_profiles", rows, "customer_no");
+    } catch (error) {
+      if (!/company_id|schema cache|column/i.test(error.message || "")) throw error;
+      await postgresUpsert("customer_call_profiles", rows.map(({ company_id, ...row }) => row), "customer_no");
+    }
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
 }
@@ -1246,6 +1263,233 @@ function dbFlag(value) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function customerTokenSignature(payload) {
+  return crypto.createHmac("sha256", customerSessionSecret).update(payload).digest("base64url");
+}
+
+function createCustomerToken(customerNo) {
+  const payload = Buffer.from(JSON.stringify({
+    customer_no: String(customerNo || ""),
+    issued_at: Date.now(),
+  })).toString("base64url");
+  return `${payload}.${customerTokenSignature(payload)}`;
+}
+
+function verifyCustomerToken(req) {
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature || customerTokenSignature(payload) !== signature) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed.customer_no) return null;
+    if (Date.now() - Number(parsed.issued_at || 0) > 1000 * 60 * 60 * 24 * 14) return null;
+    return { customer_no: String(parsed.customer_no) };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLoginValue(value) {
+  return String(value || "").replace(/[^\dA-Za-zא-ת]/g, "").trim();
+}
+
+function currentDateIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function columnsFor(db, table) {
+  return new Set(sqliteRows(db, `PRAGMA table_info(${table})`).map((row) => String(row.name || "")));
+}
+
+async function withCurrentDatabase(callback) {
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    return await callback(db);
+  } finally {
+    db.close();
+  }
+}
+
+async function findCustomerProfile(customerNo) {
+  return withCurrentDatabase((db) => {
+    ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
+    const rows = sqliteRows(db, `
+      SELECT customer_no, customer_name, phone, phone2, address, company_id
+      FROM customer_call_profiles
+      WHERE customer_no = ? AND COALESCE(source, 'calls') = 'calls'
+      LIMIT 1
+    `, [String(customerNo || "").trim()]);
+    return rows[0] || null;
+  });
+}
+
+async function handleCustomerLogin(payload, res) {
+  const customerNo = String(payload?.customerNo || payload?.customer_no || "").trim();
+  const companyId = String(payload?.companyId || payload?.company_id || "").trim();
+  if (!customerNo || !companyId) {
+    sendJson(res, 400, { ok: false, error: "missing credentials" });
+    return;
+  }
+
+  const profile = await findCustomerProfile(customerNo);
+  if (!profile || !normalizeLoginValue(profile.company_id) || normalizeLoginValue(profile.company_id) !== normalizeLoginValue(companyId)) {
+    sendJson(res, 401, { ok: false, error: "unauthorized" });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    token: createCustomerToken(profile.customer_no),
+    customer: {
+      customer_no: String(profile.customer_no || ""),
+      customer_name: String(profile.customer_name || ""),
+      address: String(profile.address || ""),
+    },
+  });
+}
+
+function productPrice(row) {
+  return numberValue(row.base_price) || numberValue(row.sale_price) || numberValue(row.purchase_price) || numberValue(row.standard_cost);
+}
+
+async function handleCustomerProducts(req, res) {
+  const session = verifyCustomerToken(req);
+  if (!session) {
+    sendJson(res, 401, { ok: false, error: "unauthorized" });
+    return;
+  }
+
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 500);
+  const rows = await withCurrentDatabase((db) => {
+    const columns = columnsFor(db, "products");
+    const select = [
+      "sku",
+      "description",
+      "category",
+      "supplier",
+      "standard_cost",
+      columns.has("base_price") ? "base_price" : "0 AS base_price",
+      columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
+      columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
+      columns.has("weight") ? "weight" : "0 AS weight",
+      columns.has("barcode") ? "barcode" : "'' AS barcode",
+      columns.has("image_url") ? "image_url" : "'' AS image_url",
+    ].join(", ");
+    const all = sqliteRows(db, `SELECT ${select} FROM products ORDER BY description ASC LIMIT 2000`);
+    return all
+      .filter((row) => {
+        if (!query) return true;
+        return [row.sku, row.description, row.category, row.supplier, row.barcode]
+          .some((value) => String(value || "").toLowerCase().includes(query));
+      })
+      .slice(0, limit)
+      .map((row) => ({
+        sku: String(row.sku || ""),
+        barcode: String(row.barcode || ""),
+        description: String(row.description || ""),
+        category: String(row.category || ""),
+        supplier: String(row.supplier || ""),
+        price: productPrice(row),
+        standard_cost: numberValue(row.standard_cost),
+        weight: numberValue(row.weight),
+        image_url: String(row.image_url || ""),
+      }));
+  });
+
+  sendJson(res, 200, { ok: true, rows });
+}
+
+async function handleCustomerOrder(payload, req, res) {
+  const session = verifyCustomerToken(req);
+  if (!session) {
+    sendJson(res, 401, { ok: false, error: "unauthorized" });
+    return;
+  }
+
+  const inputItems = Array.isArray(payload?.items) ? payload.items.slice(0, 200) : [];
+  const quantities = new Map(inputItems
+    .map((item) => [String(item?.sku || "").trim(), numberValue(item?.quantity)])
+    .filter(([sku, quantity]) => sku && quantity > 0));
+  if (!quantities.size) {
+    sendJson(res, 400, { ok: false, error: "empty order" });
+    return;
+  }
+
+  const profile = await findCustomerProfile(session.customer_no);
+  if (!profile) {
+    sendJson(res, 404, { ok: false, error: "customer not found" });
+    return;
+  }
+
+  const products = await withCurrentDatabase((db) => {
+    const columns = columnsFor(db, "products");
+    const select = [
+      "sku",
+      "description",
+      "standard_cost",
+      columns.has("base_price") ? "base_price" : "0 AS base_price",
+      columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
+      columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
+      columns.has("units_per_carton") ? "units_per_carton" : "1 AS units_per_carton",
+    ].join(", ");
+    const placeholders = [...quantities.keys()].map(() => "?").join(",");
+    return sqliteRows(db, `SELECT ${select} FROM products WHERE sku IN (${placeholders})`, [...quantities.keys()]);
+  });
+  const bySku = new Map(products.map((product) => [String(product.sku || ""), product]));
+  const orderItems = [...quantities.entries()].map(([sku, quantity], index) => {
+    const product = bySku.get(sku) || { sku, description: sku };
+    const price = productPrice(product);
+    const unitCost = numberValue(product.standard_cost);
+    return {
+      sku,
+      product_desc: String(product.description || sku),
+      quantity,
+      picked_quantity: 0,
+      note: "",
+      item_status: "pending",
+      entry_sequence: index + 1,
+      is_carton: 0,
+      units_per_carton: numberValue(product.units_per_carton) || 1,
+      estimated_price: price * quantity,
+      estimated_profit: Math.max(0, (price - unitCost) * quantity),
+    };
+  });
+  const subtotal = orderItems.reduce((sum, item) => sum + numberValue(item.estimated_price), 0);
+  const profit = orderItems.reduce((sum, item) => sum + numberValue(item.estimated_profit), 0);
+  const now = new Date().toISOString();
+  const customerName = String(profile.customer_name || session.customer_no);
+  const note = String(payload?.note || "").trim();
+
+  return handleOrderDelta({
+    order: {
+      client_order_key: `customer-${session.customer_no}-${Date.now()}`,
+      order_date: currentDateIso(),
+      customer_no: session.customer_no,
+      customer_name: customerName,
+      status: "מוכן לאיסוף",
+      notes: note ? `הזמנה מאזור לקוח. ${note}` : "הזמנה מאזור לקוח",
+      estimated_total: subtotal,
+      estimated_profit: profit,
+      updated_at: now,
+    },
+    items: orderItems,
+    call: {
+      call_date: currentDateIso(),
+      customer_no: session.customer_no,
+      customer_name: customerName,
+      status: "ordered",
+      manual_order_id: null,
+      notes: "הזמנה מאזור לקוח",
+      updated_at: now,
+    },
+  }, res);
+}
+
 function handleStatic(req, res) {
   const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   const cleanPath = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
@@ -1321,6 +1565,27 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/order-delta" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrderDelta(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/customer/login" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handleCustomerLogin(payload, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "customer login failed" });
+    }));
+    return;
+  }
+
+  if (requestPath === "/api/customer/products" && req.method === "GET") {
+    handleCustomerProducts(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "customer products failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/customer/order" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleCustomerOrder(payload, req, res)));
     return;
   }
 
