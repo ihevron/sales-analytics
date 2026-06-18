@@ -931,7 +931,7 @@ async function importCustomerAppCustomersFile(event) {
   try {
     status.textContent = "קורא קובץ לקוחות...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1));
+    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false });
     await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
     await renderCalls();
@@ -948,11 +948,12 @@ async function importCustomerAppCustomersFile(event) {
   }
 }
 
-function importCallCustomerSheets(sheets) {
+function importCallCustomerSheets(sheets, options = {}) {
   const now = new Date().toISOString();
   const byCustomer = new Map();
+  const useSheetNameDays = options.useSheetNameDays !== false;
   sheets.forEach((sheet) => {
-    const sheetDay = dayFromText(sheet.name);
+    const sheetDay = useSheetNameDays ? dayFromText(sheet.name) : "";
     const parsed = parseCallCustomerSheet(sheet.rows);
     parsed.rows.forEach((row) => {
       const customerNo = text(row.customer_no);
