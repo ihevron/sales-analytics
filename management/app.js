@@ -909,12 +909,12 @@ async function importCallCustomersFile(event) {
   try {
     document.getElementById("calls-import-status").textContent = "קורא קובץ...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets);
+    const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false });
     const imported = importedProfiles.length;
     await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
     await renderCalls();
-    document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות`;
+    document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות (${callProfileDaySummary(importedProfiles)})`;
   } catch (error) {
     console.error(error);
     document.getElementById("calls-import-status").textContent = "שגיאה בטעינת לקוחות";
@@ -934,10 +934,15 @@ async function importCustomerAppCustomersFile(event) {
     const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false });
     await importCallCustomerProfilesToPostgres(importedProfiles);
     await persistDatabase();
+    state.postgresCallRows = [];
     await renderCalls();
     renderCustomerAppCustomers();
     refreshCallCustomerSelect();
-    status.textContent = `נטענו ${integer(importedProfiles.length)} לקוחות`;
+    const daySummary = callProfileDaySummary(importedProfiles);
+    status.textContent = `נטענו ${integer(importedProfiles.length)} לקוחות (${daySummary})`;
+    if (!importedProfiles.some((profile) => text(profile.days))) {
+      alert("הלקוחות נטענו, אבל לא זוהו ימי הזמנה בעמודה H. יש לוודא שבעמודה H מופיעים ערכים כמו 1, 2 או 2,5.");
+    }
     showCustomerAppTab("customers");
   } catch (error) {
     console.error(error);
@@ -1094,9 +1099,11 @@ function normalizeCallDays(value) {
   const raw = String(value || "");
   const compact = raw.replace(/[״"]/g, "").replace(/\s+/g, " ").trim();
   const days = new Set();
-  compact.split(/[,\s/;-]+/).forEach((part) => {
+  (compact.match(/\d+/g) || []).forEach((part) => {
     const dayNumber = Number(part);
-    if (dayNumber >= 1 && dayNumber <= CALL_DAYS.length) days.add(CALL_DAYS[dayNumber - 1]);
+    if (Number.isInteger(dayNumber) && dayNumber >= 1 && dayNumber <= CALL_DAYS.length) {
+      days.add(CALL_DAYS[dayNumber - 1]);
+    }
   });
   CALL_DAYS.forEach((day) => {
     if (compact.includes(day) || compact.includes(`יום ${day}`)) days.add(day);
@@ -1106,6 +1113,16 @@ function normalizeCallDays(value) {
     if (pattern.test(compact) || compact === alias) days.add(day);
   });
   return [...days];
+}
+
+function callProfileDaySummary(profiles) {
+  const counts = Object.fromEntries(CALL_DAYS.map((day) => [day, 0]));
+  profiles.forEach((profile) => {
+    normalizeCallDays(profile.days).forEach((day) => {
+      if (day in counts) counts[day] += 1;
+    });
+  });
+  return CALL_DAYS.map((day) => `${day}: ${integer(counts[day])}`).join(" | ");
 }
 
 function dayFromText(value) {
