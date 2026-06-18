@@ -13,6 +13,8 @@ create table if not exists public.products (
   standard_cost numeric default 0,
   purchase_price numeric default 0,
   sale_price numeric default 0,
+  promo_price numeric default 0,
+  promo_discount_percent numeric default 0,
   weight numeric default 0,
   supplier text,
   pick_order numeric default 999999,
@@ -22,6 +24,8 @@ create table if not exists public.products (
 
 alter table public.products add column if not exists barcode text;
 alter table public.products add column if not exists image_url text;
+alter table public.products add column if not exists promo_price numeric default 0;
+alter table public.products add column if not exists promo_discount_percent numeric default 0;
 create index if not exists idx_products_barcode on public.products (barcode);
 create index if not exists idx_products_supplier_name on public.products (supplier);
 

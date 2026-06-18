@@ -406,7 +406,13 @@ async function handlePostgresProducts(req, res) {
   if (supplier) filters.push(`supplier=eq.${encodeURIComponent(supplier)}`);
   if (category) filters.push(`category=eq.${encodeURIComponent(category)}`);
   const filterString = filters.length ? `&${filters.join("&")}` : "";
-  const rows = await postgresRows(`products?select=sku,description,category,supplier,standard_cost,purchase_price,sale_price,weight&order=description.asc&limit=${limit}${filterString}`);
+  let rows;
+  try {
+    rows = await postgresRows(`products?select=sku,description,category,supplier,standard_cost,purchase_price,sale_price,promo_price,promo_discount_percent,weight&order=description.asc&limit=${limit}${filterString}`);
+  } catch (error) {
+    if (!/promo_price|promo_discount_percent|schema cache|column/i.test(error.message || "")) throw error;
+    rows = await postgresRows(`products?select=sku,description,category,supplier,standard_cost,purchase_price,sale_price,weight&order=description.asc&limit=${limit}${filterString}`);
+  }
   sendJson(res, 200, { ok: true, source: "postgres", rows });
 }
 
@@ -443,7 +449,9 @@ async function handlePostgresProductsImport(payload, res) {
         category,
         standard_cost: standardCost,
         purchase_price: standardCost,
-        sale_price: numberValue(product.sale_price),
+        sale_price: numberValue(product.base_price) || numberValue(product.sale_price),
+        promo_price: numberValue(product.sale_price),
+        promo_discount_percent: numberValue(product.promo_discount_percent),
         weight: numberValue(product.weight),
         supplier: String(product.supplier || "").trim(),
         pick_order: numberValue(product.pick_order) || 999999,
@@ -464,8 +472,8 @@ async function handlePostgresProductsImport(payload, res) {
         await postgresUpsert("products", rows.slice(index, index + 500), "sku");
       }
     } catch (error) {
-      if (!/image_url|schema cache|column/i.test(error.message || "")) throw error;
-      const rowsWithoutImages = rows.map(({ image_url, ...row }) => row);
+      if (!/image_url|promo_price|promo_discount_percent|schema cache|column/i.test(error.message || "")) throw error;
+      const rowsWithoutImages = rows.map(({ image_url, promo_price, promo_discount_percent, ...row }) => row);
       for (let index = 0; index < rowsWithoutImages.length; index += 500) {
         await postgresUpsert("products", rowsWithoutImages.slice(index, index + 500), "sku");
       }
@@ -1355,8 +1363,24 @@ async function handleCustomerLogin(payload, res) {
   });
 }
 
+function productListPrice(row) {
+  return numberValue(row.base_price) || numberValue(row.purchase_price) || numberValue(row.standard_cost);
+}
+
+function productPromoPrice(row) {
+  const listPrice = productListPrice(row);
+  const explicitSalePrice = numberValue(row.sale_price);
+  if (explicitSalePrice > 0 && (!listPrice || explicitSalePrice < listPrice)) return explicitSalePrice;
+
+  const discountPercent = numberValue(row.promo_discount_percent);
+  if (discountPercent > 0 && listPrice > 0) {
+    return Math.max(0, listPrice * (1 - discountPercent / 100));
+  }
+  return 0;
+}
+
 function productPrice(row) {
-  return numberValue(row.base_price) || numberValue(row.sale_price) || numberValue(row.purchase_price) || numberValue(row.standard_cost);
+  return productPromoPrice(row) || productListPrice(row);
 }
 
 async function handleCustomerProducts(req, res) {
@@ -1383,6 +1407,7 @@ async function handleCustomerProducts(req, res) {
       columns.has("base_price") ? "p.base_price" : "0 AS base_price",
       columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
       columns.has("sale_price") ? "p.sale_price" : "0 AS sale_price",
+      columns.has("promo_discount_percent") ? "p.promo_discount_percent" : "0 AS promo_discount_percent",
       columns.has("weight") ? "p.weight" : "0 AS weight",
       columns.has("barcode") ? "p.barcode" : "'' AS barcode",
       columns.has("image_url") ? "p.image_url" : "'' AS image_url",
@@ -1420,23 +1445,30 @@ async function handleCustomerProducts(req, res) {
       .filter((row) => !supplier || String(row.supplier || "") === supplier)
       .filter((row) => !category || String(row.category || "") === category)
       .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || !all.some((candidate) => numberValue(candidate.customer_quantity) > 0))
-      .filter((row) => section !== "deals" || (numberValue(row.sale_price) > 0 && numberValue(row.base_price) > numberValue(row.sale_price)))
+      .filter((row) => section !== "deals" || productPromoPrice(row) > 0)
       .slice(0, limit)
-      .map((row) => ({
-        sku: String(row.sku || ""),
-        barcode: String(row.barcode || ""),
-        description: String(row.description || ""),
-        category: String(row.category || ""),
-        supplier: String(row.supplier || ""),
-        price: productPrice(row),
-        standard_cost: numberValue(row.standard_cost),
-        weight: numberValue(row.weight),
-        image_url: String(row.image_url || ""),
-        customer_recommended: numberValue(row.customer_quantity) > 0,
-        popularity_label: numberValue(row.global_quantity) <= 0
-          ? ""
-          : (rankBySku.get(String(row.sku || "")) <= 10 ? "Top 10" : (rankBySku.get(String(row.sku || "")) <= 100 ? "Top 100" : "")),
-      }));
+      .map((row) => {
+        const listPrice = productListPrice(row);
+        const promoPrice = productPromoPrice(row);
+        return {
+          sku: String(row.sku || ""),
+          barcode: String(row.barcode || ""),
+          description: String(row.description || ""),
+          category: String(row.category || ""),
+          supplier: String(row.supplier || ""),
+          price: promoPrice || listPrice,
+          list_price: listPrice,
+          promo_price: promoPrice,
+          promo_discount_percent: numberValue(row.promo_discount_percent),
+          standard_cost: numberValue(row.standard_cost),
+          weight: numberValue(row.weight),
+          image_url: String(row.image_url || ""),
+          customer_recommended: numberValue(row.customer_quantity) > 0,
+          popularity_label: numberValue(row.global_quantity) <= 0
+            ? ""
+            : (rankBySku.get(String(row.sku || "")) <= 10 ? "Top 10" : (rankBySku.get(String(row.sku || "")) <= 100 ? "Top 100" : "")),
+        };
+      });
     return {
       rows: filtered,
       suppliers,
@@ -1479,6 +1511,7 @@ async function handleCustomerOrder(payload, req, res) {
       columns.has("base_price") ? "base_price" : "0 AS base_price",
       columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
       columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
+      columns.has("promo_discount_percent") ? "promo_discount_percent" : "0 AS promo_discount_percent",
       columns.has("units_per_carton") ? "units_per_carton" : "1 AS units_per_carton",
     ].join(", ");
     const placeholders = [...quantities.keys()].map(() => "?").join(",");

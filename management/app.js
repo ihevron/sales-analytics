@@ -141,6 +141,8 @@ const productColumns = {
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
   purchase_price: ["מחיר קניה אחרון", "מחיר קניה", "מחיר קנייה"],
   base_price: ["מחיר מחירון בסיס"],
+  sale_price: ["מחיר מבצע", "מחיר לאחר הנחה", "מחיר מכירה מבצע"],
+  promo_discount_percent: ["אחוז הנחה", "% הנחה", "הנחה %", "הנחה באחוזים"],
   weight: ["משקל"],
   supplier: ["שם ספק"],
   pick_order: ["סדר ליקוט", "סדר", "M", "קוד מיון"],
@@ -259,6 +261,8 @@ function createSharedSchema() {
       category TEXT,
       standard_cost REAL DEFAULT 0,
       base_price REAL DEFAULT 0,
+      sale_price REAL DEFAULT 0,
+      promo_discount_percent REAL DEFAULT 0,
       weight REAL DEFAULT 0,
       supplier TEXT,
       pick_order REAL DEFAULT 999999,
@@ -352,6 +356,8 @@ function createManagementSchema() {
   `);
   ensureColumn("products", "barcode", "TEXT");
   ensureColumn("products", "image_url", "TEXT");
+  ensureColumn("products", "sale_price", "REAL DEFAULT 0");
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   ensureColumn("products", "pick_order", "REAL DEFAULT 999999");
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("customer_calls", "call_again_time", "TEXT");
@@ -709,8 +715,8 @@ function importProductRows(rows) {
   const products = [];
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, barcode, image_url, description, category, standard_cost, base_price, weight, supplier, pick_order, units_per_carton, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, pick_order, units_per_carton, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
       barcode = excluded.barcode,
       image_url = excluded.image_url,
@@ -718,6 +724,8 @@ function importProductRows(rows) {
       category = excluded.category,
       standard_cost = excluded.standard_cost,
       base_price = excluded.base_price,
+      sale_price = excluded.sale_price,
+      promo_discount_percent = excluded.promo_discount_percent,
       weight = excluded.weight,
       supplier = excluded.supplier,
       pick_order = excluded.pick_order,
@@ -736,7 +744,9 @@ function importProductRows(rows) {
       description: text(mapped.description),
       category: text(mapped.category),
       standard_cost: number(mapped.standard_cost),
-      sale_price: number(mapped.base_price),
+      base_price: number(mapped.base_price),
+      sale_price: number(mapped.sale_price),
+      promo_discount_percent: number(mapped.promo_discount_percent),
       weight: number(mapped.weight),
       supplier: text(mapped.supplier),
       pick_order: pickOrderValue(row, mapped),
@@ -745,7 +755,7 @@ function importProductRows(rows) {
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
-    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
@@ -1290,6 +1300,8 @@ async function renderProducts() {
     SELECT p.sku, p.description, p.category, p.supplier, p.standard_cost,
       p.standard_cost AS purchase_price,
       p.base_price AS sale_price,
+      p.sale_price AS promo_price,
+      p.promo_discount_percent,
       p.weight
     FROM products p
     WHERE (p.sku LIKE ? OR p.description LIKE ?)
@@ -1306,6 +1318,8 @@ async function renderProducts() {
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
     { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "promo_price", label: "מחיר מבצע", format: currency2 },
+    { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
     { key: "weight", label: "משקל", format: numberDisplay },
   ], "products", "description", "asc");
 }
@@ -1338,6 +1352,8 @@ function renderProductsTable(rows) {
     { key: "standard_cost", label: "עלות תקן", format: currency2 },
     { key: "purchase_price", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "promo_price", label: "מחיר מבצע", format: currency2 },
+    { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
     { key: "weight", label: "משקל", format: numberDisplay },
   ], "products", "description", "asc");
 }
@@ -4962,6 +4978,12 @@ function currency2(value) {
 
 function percent(value) {
   return `${new Intl.NumberFormat("he-IL", { maximumFractionDigits: 1 }).format(number(value) * 100)}%`;
+}
+
+function discountPercentDisplay(value) {
+  const discount = number(value);
+  if (!discount) return "";
+  return `${new Intl.NumberFormat("he-IL", { maximumFractionDigits: 1 }).format(discount)}%`;
 }
 
 function integer(value) {

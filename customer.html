@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618c" />
-    <script defer src="./customer.js?v=20260618c"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618d" />
+    <script defer src="./customer.js?v=20260618d"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -101,10 +101,11 @@
         <div class="quantity-sheet-card">
           <button id="close-quantity-sheet" class="cart-close" type="button" aria-label="סגירה">×</button>
           <h2 id="quantity-product-name">בחירת כמות</h2>
-          <div class="quantity-picker">
-            <button id="quantity-minus" type="button">−</button>
-            <select id="quantity-select" size="7" aria-label="כמות"></select>
-            <button id="quantity-plus" type="button">+</button>
+          <div id="quantity-options" class="quantity-options" role="listbox" aria-label="כמות"></div>
+          <div class="quantity-manual">
+            <button id="quantity-minus" type="button" aria-label="הפחתת כמות">−</button>
+            <input id="quantity-input" type="number" inputmode="numeric" min="0" max="999" aria-label="כמות" />
+            <button id="quantity-plus" type="button" aria-label="הוספת כמות">+</button>
           </div>
           <button id="quantity-apply" class="submit-button" type="button">עדכון כמות</button>
         </div>

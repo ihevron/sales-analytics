@@ -1,15 +1,20 @@
 :root {
   color-scheme: light;
-  --bg: #f4f6fb;
+  --bg: #f8fafc;
   --panel: #ffffff;
-  --ink: #142033;
-  --muted: #65748b;
-  --line: #d9e0ec;
-  --brand: #0f766e;
-  --brand-dark: #115e59;
-  --accent: #1d4ed8;
-  --danger: #dc2626;
-  font-family: "Segoe UI", Arial, sans-serif;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-soft: #dbeafe;
+  --accent: #111827;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #16a34a;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  --soft-green: #dcfce7;
+  font-family: Tahoma, Arial, sans-serif;
 }
 
 * {
@@ -23,7 +28,9 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 32rem),
+    linear-gradient(180deg, #ffffff 0%, var(--bg) 42%, #eef6f1 100%);
   color: var(--ink);
 }
 
@@ -55,7 +62,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 28px;
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow);
 }
 
 .login-logo {
@@ -100,7 +107,7 @@ input:focus,
 textarea:focus,
 select:focus {
   outline: 2px solid rgba(29, 78, 216, 0.18);
-  border-color: var(--accent);
+  border-color: var(--primary);
 }
 
 .login-card label + label {
@@ -114,14 +121,14 @@ select:focus {
   border-radius: 8px;
   padding: 13px 16px;
   margin-top: 18px;
-  background: var(--brand);
+  background: var(--primary);
   color: white;
   font-weight: 800;
 }
 
 .login-card button:hover,
 .submit-button:hover {
-  background: var(--brand-dark);
+  background: var(--primary-dark);
 }
 
 .submit-button:disabled {
@@ -211,9 +218,9 @@ select:focus {
 }
 
 .nav-pill.active {
-  background: #e0f2fe;
+  background: var(--primary-soft);
   border-color: #93c5fd;
-  color: #1e40af;
+  color: var(--primary-dark);
 }
 
 .toolbar {
@@ -289,14 +296,60 @@ select:focus {
   width: fit-content;
   border-radius: 999px;
   padding: 4px 9px;
-  background: #ecfdf5;
+  background: var(--soft-green);
   color: #047857;
+  border: 1px solid #86efac;
   font-size: 12px;
   font-weight: 800;
 }
 
+.product-badge.top10 {
+  background: #ffedd5;
+  color: #c2410c;
+  border-color: #fdba74;
+}
+
+.product-badge.top100 {
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  border-color: #93c5fd;
+}
+
+.product-badge.recommended {
+  background: var(--soft-green);
+  color: #047857;
+  border-color: #86efac;
+}
+
 .product-price {
   font-size: 18px;
+  font-weight: 900;
+}
+
+.price-stack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.old-price {
+  color: var(--muted);
+  text-decoration: line-through;
+  font-size: 13px;
+}
+
+.promo-price {
+  color: #dc2626;
+  font-size: 18px;
+}
+
+.discount-chip {
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 11px;
   font-weight: 900;
 }
 
@@ -464,10 +517,10 @@ select:focus {
   border: 0;
   border-radius: 999px;
   padding: 13px 18px;
-  background: var(--accent);
+  background: var(--primary);
   color: #fff;
   font-weight: 900;
-  box-shadow: 0 14px 34px rgba(29, 78, 216, 0.3);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, 0.3);
 }
 
 .cart-fab strong {
@@ -477,7 +530,7 @@ select:focus {
   place-items: center;
   border-radius: 50%;
   background: #fff;
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .cart-backdrop {
@@ -511,24 +564,51 @@ select:focus {
   font-size: 18px;
 }
 
-.quantity-picker {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) 54px;
-  gap: 12px;
-  align-items: center;
+.quantity-options {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+  scroll-snap-type: x mandatory;
 }
 
-.quantity-picker button {
+.quantity-options button {
+  flex: 0 0 58px;
+  height: 58px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 900;
+  scroll-snap-align: center;
+}
+
+.quantity-options button.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.quantity-manual {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 58px;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.quantity-manual button {
   height: 54px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: #f8fafc;
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 900;
 }
 
-.quantity-picker select {
-  height: 210px;
+.quantity-manual input {
+  height: 54px;
   text-align: center;
   font-size: 24px;
   font-weight: 900;
