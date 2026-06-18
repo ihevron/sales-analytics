@@ -494,8 +494,16 @@ function bindEvents() {
   document.getElementById("save-customer-app-settings").addEventListener("click", saveCustomerAppSettings);
   document.getElementById("save-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(false));
   document.getElementById("clear-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(true));
+  document.getElementById("reset-customer-app-promos").addEventListener("click", resetCustomerAppPromotions);
+  document.getElementById("customer-app-promo-product-query").addEventListener("input", handleCustomerAppPromoProductInput);
   document.getElementById("load-customer-app-customer").addEventListener("click", loadCustomerAppCustomer);
   document.getElementById("save-customer-app-customer").addEventListener("click", saveCustomerAppCustomer);
+  document.getElementById("customer-app-customer-query").addEventListener("input", debounce(renderCustomerAppCustomers, 200));
+  ["customer-app-product-query", "customer-app-product-supplier", "customer-app-product-category"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", () => renderCustomerAppProducts());
+  });
+  document.querySelectorAll("[data-customer-app-tab]").forEach((button) => button.addEventListener("click", () => showCustomerAppTab(button.dataset.customerAppTab)));
+  document.querySelectorAll(".report-tabs [data-screen]").forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.screen)));
   document.getElementById("customer-search-button").addEventListener("click", searchCustomers);
   document.getElementById("customer-query").addEventListener("input", debounce(searchCustomers, 250));
   ["customer-supplier-filter", "customer-category-filter", "customer-product-filter"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
@@ -626,11 +634,16 @@ async function refreshAll() {
   await renderCalls();
   renderCustomerAppSettings();
   renderCustomerAppPromotions();
+  renderCustomerAppCustomers();
+  refreshCustomerAppProductFilters();
+  renderCustomerAppProducts();
+  refreshCustomerAppProductOptions();
   renderRecommendations();
 }
 
 function showScreen(id) {
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
+  document.querySelectorAll(".report-tabs [data-screen]").forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.toggle("active-screen", screen.id === id));
   document.getElementById("screen-title").textContent = screens[id].title;
   document.getElementById("screen-subtitle").textContent = screens[id].subtitle;
@@ -652,6 +665,10 @@ function showScreen(id) {
   if (id === "customer-app") {
     renderCustomerAppSettings();
     renderCustomerAppPromotions();
+    renderCustomerAppCustomers();
+    refreshCustomerAppProductFilters();
+    renderCustomerAppProducts();
+    refreshCustomerAppProductOptions();
   }
   if (id === "recommendations") renderRecommendations();
 }
@@ -4851,6 +4868,24 @@ function renderCustomerAppSettings() {
   document.getElementById("customer-app-warranty-text").value = getAppMetadata("customer_warranty_text");
 }
 
+function showCustomerAppTab(tab) {
+  document.querySelectorAll("[data-customer-app-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.customerAppTab === tab);
+  });
+  document.querySelectorAll("[data-customer-app-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.customerAppPanel === tab);
+  });
+  if (tab === "customers") renderCustomerAppCustomers();
+  if (tab === "products") {
+    refreshCustomerAppProductFilters();
+    renderCustomerAppProducts();
+  }
+  if (tab === "promotions") {
+    refreshCustomerAppProductOptions();
+    renderCustomerAppPromotions();
+  }
+}
+
 async function saveCustomerAppSettings() {
   setAppMetadata("customer_login_title", text(document.getElementById("customer-app-login-title").value));
   setAppMetadata("customer_login_subtitle", text(document.getElementById("customer-app-login-subtitle").value));
@@ -4863,12 +4898,11 @@ async function saveCustomerAppSettings() {
 function renderCustomerAppPromotions() {
   const table = document.getElementById("customer-app-promotions-table");
   if (!table) return;
-  ensureColumn("products", "promo_price", "REAL DEFAULT 0");
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   const rows = queryRows(`
-    SELECT sku, description, supplier, category, sale_price, promo_price, promo_discount_percent
+    SELECT sku, description, supplier, category, base_price AS sale_price, sale_price AS promo_price, promo_discount_percent
     FROM products
-    WHERE COALESCE(promo_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0
+    WHERE COALESCE(sale_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0
     ORDER BY updated_at DESC, description ASC
     LIMIT 50
   `);
@@ -4880,16 +4914,25 @@ function renderCustomerAppPromotions() {
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
+    { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">עריכה</button>
+      <button class="danger-action" data-remove-customer-app-promo="${escapeHtml(row.sku)}">הסרה</button>
+    ` },
   ], "customer-app-promotions", "description", "asc");
+  document.querySelectorAll("[data-edit-customer-app-promo]").forEach((button) => {
+    button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
+  });
+  document.querySelectorAll("[data-remove-customer-app-promo]").forEach((button) => {
+    button.addEventListener("click", () => removeCustomerAppPromotion(button.dataset.removeCustomerAppPromo));
+  });
 }
 
 async function saveCustomerAppPromo(clearPromo = false) {
-  ensureColumn("products", "promo_price", "REAL DEFAULT 0");
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   const status = document.getElementById("customer-app-promo-status");
-  const sku = text(document.getElementById("customer-app-promo-sku").value);
+  const sku = selectedCustomerAppPromoSku();
   if (!sku) {
-    status.textContent = "יש להזין מק״ט";
+    status.textContent = "יש לבחור מוצר או מק״ט";
     return;
   }
   const product = firstRow("SELECT sku FROM products WHERE sku = ?", [sku]);
@@ -4901,13 +4944,83 @@ async function saveCustomerAppPromo(clearPromo = false) {
   const promoDiscount = clearPromo ? 0 : number(document.getElementById("customer-app-promo-discount").value);
   state.db.run(`
     UPDATE products
-    SET promo_price = ?, promo_discount_percent = ?, updated_at = ?
+    SET sale_price = ?, promo_discount_percent = ?, updated_at = ?
     WHERE sku = ?
   `, [promoPrice, promoDiscount, new Date().toISOString(), sku]);
   const result = await persistDatabase();
   status.textContent = result.server.ok ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר") : "נשמר בדפדפן בלבד";
+  document.getElementById("customer-app-promo-sku").value = sku;
   renderCustomerAppPromotions();
+  renderCustomerAppProducts();
   if (document.getElementById("products")?.classList.contains("active-screen")) await renderProducts();
+}
+
+function selectedCustomerAppPromoSku() {
+  const hiddenSku = text(document.getElementById("customer-app-promo-sku").value);
+  const query = text(document.getElementById("customer-app-promo-product-query").value);
+  if (hiddenSku) return hiddenSku;
+  const exact = firstRow(`
+    SELECT sku FROM products
+    WHERE sku = ? OR description = ?
+    LIMIT 1
+  `, [query, query]);
+  return exact.sku || "";
+}
+
+function handleCustomerAppPromoProductInput() {
+  const input = document.getElementById("customer-app-promo-product-query");
+  const value = text(input.value);
+  const row = firstRow(`
+    SELECT sku, description, base_price, sale_price, promo_discount_percent
+    FROM products
+    WHERE sku = ? OR description = ?
+    LIMIT 1
+  `, [value, value]);
+  document.getElementById("customer-app-promo-sku").value = row.sku || "";
+  if (row.sku) {
+    input.value = `${row.sku} · ${row.description || ""}`;
+    document.getElementById("customer-app-promo-price").value = number(row.sale_price) || "";
+    document.getElementById("customer-app-promo-discount").value = number(row.promo_discount_percent) || "";
+  }
+}
+
+function refreshCustomerAppProductOptions() {
+  const list = document.getElementById("customer-app-product-options");
+  if (!list) return;
+  const rows = queryRows(`
+    SELECT sku, description FROM products
+    ORDER BY description ASC
+    LIMIT 1000
+  `);
+  list.innerHTML = rows.map((row) => `
+    <option value="${escapeHtml(row.sku)}">${escapeHtml(row.description || row.sku)}</option>
+    <option value="${escapeHtml(row.description || row.sku)}">${escapeHtml(row.sku)}</option>
+  `).join("");
+}
+
+async function resetCustomerAppPromotions() {
+  if (!confirm("לאפס את כל המבצעים במערכת?")) return;
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  state.db.run("UPDATE products SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
+  const result = await persistDatabase();
+  document.getElementById("customer-app-promo-status").textContent = result.server.ok ? "כל המבצעים אופסו" : "נשמר בדפדפן בלבד";
+  renderCustomerAppPromotions();
+  renderCustomerAppProducts();
+}
+
+function editCustomerAppPromo(sku) {
+  const row = firstRow("SELECT sku, description, sale_price, promo_discount_percent FROM products WHERE sku = ?", [sku]);
+  if (!row.sku) return;
+  document.getElementById("customer-app-promo-sku").value = row.sku;
+  document.getElementById("customer-app-promo-product-query").value = `${row.sku} · ${row.description || ""}`;
+  document.getElementById("customer-app-promo-price").value = number(row.sale_price) || "";
+  document.getElementById("customer-app-promo-discount").value = number(row.promo_discount_percent) || "";
+  showCustomerAppTab("promotions");
+}
+
+async function removeCustomerAppPromotion(sku) {
+  document.getElementById("customer-app-promo-sku").value = sku;
+  await saveCustomerAppPromo(true);
 }
 
 function loadCustomerAppCustomer() {
@@ -4977,6 +5090,89 @@ async function saveCustomerAppCustomer() {
   const result = await persistDatabase();
   status.textContent = result.server.ok ? "הלקוח נשמר" : "נשמר בדפדפן בלבד";
   refreshCallCustomerSelect();
+  renderCustomerAppCustomers();
+}
+
+function renderCustomerAppCustomers() {
+  const table = document.getElementById("customer-app-customers-table");
+  if (!table) return;
+  const query = `%${text(document.getElementById("customer-app-customer-query")?.value)}%`;
+  const rows = queryRows(`
+    SELECT customer_no, customer_name, company_id, phone, address, customer_type, source, terms_accepted_at, updated_at
+    FROM customer_call_profiles
+    WHERE customer_no LIKE ? OR customer_name LIKE ? OR company_id LIKE ? OR phone LIKE ?
+    ORDER BY customer_name ASC
+    LIMIT 700
+  `, [query, query, query, query]);
+  renderTable("customer-app-customers-table", rows, [
+    { key: "customer_no", label: "מספר לקוח" },
+    { key: "customer_name", label: "שם לקוח" },
+    { key: "company_id", label: "ח.פ / סיסמה" },
+    { key: "phone", label: "טלפון" },
+    { key: "address", label: "כתובת" },
+    { key: "customer_type", label: "סוג" },
+    { key: "terms_accepted_at", label: "אישור תנאים", format: fullDateDisplay },
+    { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action" data-edit-customer-app-customer="${escapeHtml(row.customer_no)}">עריכה</button>
+    ` },
+  ], "customer-app-customers", "customer_name", "asc");
+  document.querySelectorAll("[data-edit-customer-app-customer]").forEach((button) => {
+    button.addEventListener("click", () => editCustomerAppCustomer(button.dataset.editCustomerAppCustomer));
+  });
+}
+
+function editCustomerAppCustomer(customerNo) {
+  document.getElementById("customer-app-customer-no").value = customerNo;
+  loadCustomerAppCustomer();
+  showCustomerAppTab("customers");
+}
+
+function refreshCustomerAppProductFilters() {
+  const supplier = document.getElementById("customer-app-product-supplier");
+  if (!supplier) return;
+  fillSelect("customer-app-product-supplier", "כל הספקים", queryRows("SELECT DISTINCT supplier AS value FROM products WHERE supplier <> '' ORDER BY supplier"));
+  fillSelect("customer-app-product-category", "כל הקטגוריות", queryRows("SELECT DISTINCT category AS value FROM products WHERE category <> '' ORDER BY category"));
+}
+
+function renderCustomerAppProducts() {
+  const table = document.getElementById("customer-app-products-table");
+  if (!table) return;
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  const query = `%${text(document.getElementById("customer-app-product-query")?.value)}%`;
+  const supplier = document.getElementById("customer-app-product-supplier")?.value || "";
+  const category = document.getElementById("customer-app-product-category")?.value || "";
+  const rows = queryRows(`
+    SELECT sku, description, category, supplier, standard_cost,
+      standard_cost AS purchase_price,
+      base_price AS sale_price,
+      sale_price AS promo_price,
+      promo_discount_percent,
+      weight
+    FROM products
+    WHERE (sku LIKE ? OR description LIKE ?)
+      AND (? = '' OR supplier = ?)
+      AND (? = '' OR category = ?)
+    ORDER BY description ASC
+    LIMIT 700
+  `, [query, query, supplier, supplier, category, category]);
+  renderTable("customer-app-products-table", rows, [
+    { key: "sku", label: "מק״ט" },
+    { key: "description", label: "תיאור" },
+    { key: "category", label: "קטגוריה" },
+    { key: "supplier", label: "ספק" },
+    { key: "standard_cost", label: "עלות תקן", format: currency2 },
+    { key: "purchase_price", label: "מחיר קניה", format: currency2 },
+    { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "promo_price", label: "מחיר מבצע", format: currency2 },
+    { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
+    { key: "weight", label: "משקל", format: numberDisplay },
+    { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">הגדרת מבצע</button>
+    ` },
+  ], "customer-app-products", "description", "asc");
+  document.querySelectorAll("#customer-app-products-table [data-edit-customer-app-promo]").forEach((button) => {
+    button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
+  });
 }
 
 function resetRecommendationForm() {
@@ -5129,6 +5325,13 @@ function toSqlDate(date) {
 function displayShortDate(sqlDate) {
   const [year, month, day] = String(sqlDate || "").split("-");
   return day && month ? `${day}/${month}` : "";
+}
+
+function fullDateDisplay(value) {
+  const dateValue = parseDate(value);
+  if (!dateValue) return "";
+  const [year, month, day] = String(dateValue).split("-");
+  return day && month && year ? `${day}/${month}/${year}` : dateValue;
 }
 
 function dateRange(months) {

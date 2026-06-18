@@ -417,11 +417,23 @@ select:focus {
   font-weight: 900;
 }
 
-.quantity-display {
+.quantity-display,
+.quantity-inline-select {
   min-width: 54px;
   padding-inline: 10px;
   color: var(--ink);
   background: #fff !important;
+}
+
+.quantity-inline-select {
+  width: 64px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 6px;
+  text-align: center;
+  text-align-last: center;
+  font-weight: 900;
 }
 
 .quantity-row input {
@@ -838,9 +850,17 @@ body.terms-open {
     height: 30px;
   }
 
-  .quantity-display {
+  .quantity-display,
+  .quantity-inline-select {
     min-width: 46px;
     padding-inline: 6px;
+  }
+
+  .quantity-inline-select {
+    width: 48px;
+    height: 30px;
+    min-height: 30px;
+    font-size: 14px;
   }
 
   .quantity-sheet {

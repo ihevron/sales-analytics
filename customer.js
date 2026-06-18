@@ -387,7 +387,9 @@ function renderProducts() {
           ${renderPrice(product)}
           <div class="quantity-row" data-sku="${escapeHtml(product.sku)}">
             <button type="button" data-action="minus" aria-label="הפחתה">−</button>
-            <button type="button" class="quantity-display" data-action="picker" aria-label="בחירת כמות">${integer(quantity)}</button>
+            <select class="quantity-inline-select" data-action="quantity-select" aria-label="בחירת כמות">
+              ${quantitySelectOptions(quantity)}
+            </select>
             <button type="button" data-action="plus" aria-label="הוספה">+</button>
           </div>
         </div>
@@ -398,8 +400,18 @@ function renderProducts() {
     const sku = row.dataset.sku;
     row.querySelector('[data-action="minus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) - 1));
     row.querySelector('[data-action="plus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) + 1));
-    row.querySelector('[data-action="picker"]').addEventListener("click", () => openQuantitySheet(sku));
+    row.querySelector('[data-action="quantity-select"]').addEventListener("change", (event) => setQuantity(sku, Number(event.target.value) || 0));
   });
+}
+
+function quantitySelectOptions(selectedQuantity) {
+  const selected = Math.min(999, Math.max(0, Math.round(Number(selectedQuantity) || 0)));
+  const values = Array.from({ length: 101 }, (_, value) => value);
+  if (!values.includes(selected)) values.push(selected);
+  return values
+    .sort((a, b) => a - b)
+    .map((value) => `<option value="${value}"${value === selected ? " selected" : ""}>${value}</option>`)
+    .join("");
 }
 
 function renderPrice(product) {

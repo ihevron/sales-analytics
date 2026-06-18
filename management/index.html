@@ -23,12 +23,10 @@
         </div>
         <nav class="main-nav">
           <button class="nav-item active" data-screen="dashboard"><span>🏠</span>דשבורד</button>
-          <button class="nav-item" data-screen="customer-search"><span>👥</span>ניתוח לקוחות</button>
           <button class="nav-item" data-screen="order-create"><span>📦</span>יצירת הזמנה</button>
           <button class="nav-item" data-screen="picking"><span>📋</span>ליקוט הזמנות</button>
           <button class="nav-item" data-screen="order-history"><span>🚚</span>הזמנות בתהליך</button>
           <button class="nav-item" data-screen="calls"><span>📞</span>ניהול שיחות</button>
-          <button class="nav-item" data-screen="products"><span>📦</span>מוצרים</button>
           <button class="nav-item" data-screen="reports"><span>📊</span>דוחות</button>
           <button class="nav-item" data-screen="customer-app"><span>🛒</span>אפליקציית לקוחות</button>
           <button class="nav-item" data-screen="recommendations"><span>📊</span>המלצות מכירה</button>
@@ -348,6 +346,11 @@
         </section>
 
         <section id="reports" class="screen">
+          <div class="report-tabs">
+            <button class="small-action" type="button" data-screen="customer-search">ניתוח לקוחות</button>
+            <button class="small-action" type="button" data-screen="products">מוצרים</button>
+            <button class="small-action active" type="button" data-screen="reports">בדיקת חשבונית</button>
+          </div>
           <div class="panel">
             <div class="panel-header">
               <div>
@@ -394,8 +397,14 @@
         </section>
 
         <section id="customer-app" class="screen">
+          <div class="customer-app-tabs">
+            <button class="active" type="button" data-customer-app-tab="settings">נוסחים</button>
+            <button type="button" data-customer-app-tab="customers">לקוחות</button>
+            <button type="button" data-customer-app-tab="products">מוצרים</button>
+            <button type="button" data-customer-app-tab="promotions">מבצעים</button>
+          </div>
           <div class="customer-app-grid">
-            <div class="panel">
+            <div class="panel customer-app-panel active" data-customer-app-panel="settings">
               <div class="panel-header">
                 <div>
                   <h2>נוסחי אפליקציית לקוחות</h2>
@@ -426,18 +435,21 @@
               </div>
             </div>
 
-            <div class="panel">
+            <div class="panel customer-app-panel" data-customer-app-panel="promotions">
               <div class="panel-header">
                 <div>
                   <h2>עריכת מבצעים</h2>
-                  <p>עדכון מחיר מבצע או אחוז הנחה לפי מק״ט.</p>
+                  <p>עדכון מחיר מבצע או אחוז הנחה לפי מק״ט או שם מוצר.</p>
                 </div>
+                <button id="reset-customer-app-promos" class="danger-action" type="button">איפוס כל המבצעים</button>
               </div>
               <div class="customer-app-form compact">
                 <label>
-                  מק״ט
-                  <input id="customer-app-promo-sku" type="text" placeholder="לדוגמה 2165" />
+                  מוצר או מק״ט
+                  <input id="customer-app-promo-product-query" type="search" list="customer-app-product-options" placeholder="הקלד שם מוצר או מק״ט" />
+                  <datalist id="customer-app-product-options"></datalist>
                 </label>
+                <input id="customer-app-promo-sku" type="hidden" />
                 <label>
                   מחיר מבצע
                   <input id="customer-app-promo-price" type="number" step="0.01" min="0" />
@@ -455,11 +467,11 @@
               <div class="table-wrap"><table id="customer-app-promotions-table"></table></div>
             </div>
 
-            <div class="panel">
+            <div class="panel customer-app-panel" data-customer-app-panel="customers">
               <div class="panel-header">
                 <div>
-                  <h2>עדכון לקוח</h2>
-                  <p>עדכון פרטי לקוח להזדהות ולהזמנות אונליין.</p>
+                  <h2>לקוחות להזמנות אונליין</h2>
+                  <p>צפייה, עריכה והוספת לקוחות עם פרטי התחברות.</p>
                 </div>
               </div>
               <div class="customer-app-form compact">
@@ -489,6 +501,25 @@
                   <span id="customer-app-customer-status" class="muted-note"></span>
                 </div>
               </div>
+              <div class="toolbar customer-app-toolbar">
+                <input id="customer-app-customer-query" type="search" placeholder="חיפוש לקוח לפי שם, מספר או ח.פ" />
+              </div>
+              <div class="table-wrap"><table id="customer-app-customers-table"></table></div>
+            </div>
+
+            <div class="panel customer-app-panel" data-customer-app-panel="products">
+              <div class="panel-header">
+                <div>
+                  <h2>מוצרים באפליקציית לקוחות</h2>
+                  <p>רשימת מוצרים ומחירים, כולל אפשרות מהירה להגדיר מבצע.</p>
+                </div>
+              </div>
+              <div class="toolbar customer-app-toolbar">
+                <input id="customer-app-product-query" type="search" placeholder="חיפוש מוצר או מק״ט" />
+                <select id="customer-app-product-supplier"><option value="">כל הספקים</option></select>
+                <select id="customer-app-product-category"><option value="">כל הקטגוריות</option></select>
+              </div>
+              <div class="table-wrap"><table id="customer-app-products-table"></table></div>
             </div>
           </div>
         </section>

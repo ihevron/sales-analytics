@@ -210,6 +210,44 @@ button { cursor: pointer; }
   gap: 16px;
 }
 
+.report-tabs,
+.customer-app-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+}
+
+.customer-app-tabs button {
+  min-height: 40px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.customer-app-tabs button.active,
+.report-tabs button.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.customer-app-panel {
+  display: none;
+}
+
+.customer-app-panel.active {
+  display: block;
+}
+
+.customer-app-panel label {
+  font-weight: 900;
+  color: var(--ink);
+}
+
 .customer-app-form {
   display: grid;
   gap: 14px;
@@ -228,6 +266,10 @@ button { cursor: pointer; }
 .customer-app-form .form-actions {
   grid-column: 1 / -1;
   justify-content: flex-start;
+}
+
+.customer-app-toolbar {
+  margin-top: 14px;
 }
 
 .table-wrap {
