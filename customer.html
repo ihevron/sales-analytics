@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618" />
-    <script defer src="./customer.js?v=20260618"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618b" />
+    <script defer src="./customer.js?v=20260618b"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -33,7 +33,7 @@
           <div>
             <img src="./management/wa-logo.png" alt="" class="header-logo" />
             <div>
-              <h1>הזמנה מהקטלוג</h1>
+              <h1>מסך הזמנה</h1>
               <p id="customer-name">לקוח</p>
             </div>
           </div>
@@ -41,12 +41,34 @@
         </header>
 
         <div class="catalog-layout">
+          <aside class="catalog-nav">
+            <button class="nav-pill active" data-section="recommended">המומלצים שלי</button>
+            <button class="nav-pill" data-section="deals">מבצעים</button>
+            <button class="nav-pill" data-section="all">כל המוצרים</button>
+            <div class="nav-group">
+              <h2>קטגוריות</h2>
+              <div id="category-menu" class="nav-list"></div>
+            </div>
+          </aside>
+
           <section class="catalog-panel">
             <div class="toolbar">
               <label class="search-box">
                 חיפוש מוצר
                 <input id="product-search" type="search" placeholder="שם מוצר, מק״ט או ברקוד" />
               </label>
+              <label>
+                ספק
+                <select id="supplier-filter"></select>
+              </label>
+              <label>
+                קטגוריה
+                <select id="category-filter"></select>
+              </label>
+            </div>
+            <div class="catalog-title">
+              <h2 id="section-title">המומלצים שלי</h2>
+              <p id="section-subtitle">מוצרים שהלקוח קונה בדרך כלל, או הנמכרים ביותר אם אין היסטוריה קודמת.</p>
             </div>
             <div id="product-grid" class="product-grid" aria-live="polite"></div>
           </section>

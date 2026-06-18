@@ -4,12 +4,33 @@ const CUSTOMER_KEY = "customerOrderProfile";
 const CART_KEY = "customerOrderCart";
 const FALLBACK_IMAGE = "./management/wa-logo.png";
 
+const SECTION_TEXT = {
+  recommended: {
+    title: "המומלצים שלי",
+    subtitle: "מוצרים שהלקוח קונה בדרך כלל, או הנמכרים ביותר אם אין היסטוריה קודמת.",
+  },
+  deals: {
+    title: "מבצעים",
+    subtitle: "מוצרים עם מחיר מבצע כאשר קיימים נתוני מבצע במערכת.",
+  },
+  all: {
+    title: "כל המוצרים",
+    subtitle: "קטלוג מלא, ממוין לפי המוצרים הנמכרים ביותר.",
+  },
+};
+
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || "",
   customer: safeJson(localStorage.getItem(CUSTOMER_KEY), null),
   products: [],
+  suppliers: [],
+  categories: [],
   cart: safeJson(localStorage.getItem(CART_KEY), {}),
   search: "",
+  supplier: "",
+  category: "",
+  section: "recommended",
+  hasCustomerHistory: false,
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -21,7 +42,23 @@ function init() {
     state.search = event.target.value.trim();
     loadProducts();
   }, 250));
+  document.getElementById("supplier-filter").addEventListener("change", (event) => {
+    state.supplier = event.target.value;
+    loadProducts();
+  });
+  document.getElementById("category-filter").addEventListener("change", (event) => {
+    state.category = event.target.value;
+    state.section = state.category ? "all" : state.section;
+    loadProducts();
+  });
   document.getElementById("submit-order").addEventListener("click", submitOrder);
+  document.querySelectorAll("[data-section]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.section = button.dataset.section;
+      if (state.section !== "all") state.category = "";
+      loadProducts();
+    });
+  });
 
   if (state.token && state.customer) {
     showApp();
@@ -103,6 +140,7 @@ function logout() {
   state.token = "";
   state.customer = null;
   state.cart = {};
+  state.products = [];
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_KEY);
   localStorage.removeItem(CART_KEY);
@@ -111,29 +149,78 @@ function logout() {
 }
 
 function showLogin() {
+  document.body.classList.remove("ordering-open");
   document.getElementById("login-view").hidden = false;
   document.getElementById("app-view").hidden = true;
+  window.scrollTo(0, 0);
 }
 
 function showApp() {
+  document.body.classList.add("ordering-open");
   document.getElementById("login-view").hidden = true;
   document.getElementById("app-view").hidden = false;
   document.getElementById("customer-name").textContent = state.customer?.customer_name || "לקוח";
+  window.scrollTo(0, 0);
 }
 
 async function loadProducts() {
+  updateNavigation();
   const grid = document.getElementById("product-grid");
   grid.innerHTML = `<div class="empty-state">טוען מוצרים...</div>`;
   try {
-    const params = new URLSearchParams({ limit: "300" });
+    const params = new URLSearchParams({ limit: "300", section: state.section });
     if (state.search) params.set("q", state.search);
+    if (state.supplier) params.set("supplier", state.supplier);
+    if (state.category) params.set("category", state.category);
     const data = await api(`/api/customer/products?${params.toString()}`);
     state.products = Array.isArray(data.rows) ? data.rows : [];
+    state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+    state.categories = Array.isArray(data.categories) ? data.categories : [];
+    state.hasCustomerHistory = Boolean(data.hasCustomerHistory);
+    renderFilters();
+    updateNavigation();
     renderProducts();
   } catch (error) {
     if (/unauthorized/i.test(error.message)) logout();
     grid.innerHTML = `<div class="empty-state">לא ניתן לטעון מוצרים כרגע</div>`;
   }
+}
+
+function renderFilters() {
+  fillSelect(document.getElementById("supplier-filter"), "כל הספקים", state.suppliers, state.supplier);
+  fillSelect(document.getElementById("category-filter"), "כל הקטגוריות", state.categories, state.category);
+  const menu = document.getElementById("category-menu");
+  menu.innerHTML = state.categories.slice(0, 18).map((category) => `
+    <button type="button" class="${state.category === category ? "active" : ""}" data-category="${escapeHtml(category)}">${escapeHtml(category)}</button>
+  `).join("") || `<span>אין קטגוריות</span>`;
+  menu.querySelectorAll("[data-category]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.category = button.dataset.category;
+      state.section = "all";
+      loadProducts();
+    });
+  });
+}
+
+function fillSelect(select, defaultLabel, values, selected) {
+  const current = selected && values.includes(selected) ? selected : "";
+  if (selected && !current) state[select.id === "supplier-filter" ? "supplier" : "category"] = "";
+  select.innerHTML = [
+    `<option value="">${defaultLabel}</option>`,
+    ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`),
+  ].join("");
+  select.value = current;
+}
+
+function updateNavigation() {
+  document.querySelectorAll("[data-section]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.section === state.section);
+  });
+  const text = SECTION_TEXT[state.section] || SECTION_TEXT.all;
+  document.getElementById("section-title").textContent = state.category || text.title;
+  document.getElementById("section-subtitle").textContent = state.section === "recommended" && !state.hasCustomerHistory
+    ? "עדיין אין היסטוריה ללקוח הזה, לכן מוצגים המוצרים הנמכרים ביותר בכלל."
+    : text.subtitle;
 }
 
 function renderProducts() {
@@ -145,12 +232,16 @@ function renderProducts() {
   grid.innerHTML = state.products.map((product) => {
     const quantity = state.cart[product.sku]?.quantity || 0;
     const image = product.image_url || FALLBACK_IMAGE;
+    const popularity = product.customer_quantity > 0
+      ? `נקנה בעבר: ${integer(product.customer_quantity)} יח׳`
+      : (product.global_quantity > 0 ? `פופולרי: ${integer(product.global_quantity)} יח׳` : "");
     return `
       <article class="product-card">
         <img src="${escapeHtml(image)}" alt="" loading="lazy" onerror="this.src='${FALLBACK_IMAGE}'" />
         <div class="product-info">
           <h3>${escapeHtml(product.description || product.sku)}</h3>
           <div class="product-meta">מק״ט ${escapeHtml(product.sku)}${product.category ? ` · ${escapeHtml(product.category)}` : ""}</div>
+          ${popularity ? `<div class="product-badge">${escapeHtml(popularity)}</div>` : ""}
           <div class="product-price">${money(product.price)}</div>
           <div class="quantity-row" data-sku="${escapeHtml(product.sku)}">
             <button type="button" data-action="minus" aria-label="הפחתה">−</button>

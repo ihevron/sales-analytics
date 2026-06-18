@@ -1302,6 +1302,10 @@ function columnsFor(db, table) {
   return new Set(sqliteRows(db, `PRAGMA table_info(${table})`).map((row) => String(row.name || "")));
 }
 
+function tableExists(db, table) {
+  return sqliteRows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", [table]).length > 0;
+}
+
 async function withCurrentDatabase(callback) {
   const SQL = await initServerSql();
   const data = await readCurrentDatabaseBuffer();
@@ -1364,29 +1368,55 @@ async function handleCustomerProducts(req, res) {
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
+  const supplier = String(url.searchParams.get("supplier") || "").trim();
+  const category = String(url.searchParams.get("category") || "").trim();
+  const section = String(url.searchParams.get("section") || "recommended").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 500);
-  const rows = await withCurrentDatabase((db) => {
+  const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
     const select = [
-      "sku",
-      "description",
-      "category",
-      "supplier",
-      "standard_cost",
-      columns.has("base_price") ? "base_price" : "0 AS base_price",
-      columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
-      columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
-      columns.has("weight") ? "weight" : "0 AS weight",
-      columns.has("barcode") ? "barcode" : "'' AS barcode",
-      columns.has("image_url") ? "image_url" : "'' AS image_url",
+      "p.sku",
+      "p.description",
+      "p.category",
+      "p.supplier",
+      "p.standard_cost",
+      columns.has("base_price") ? "p.base_price" : "0 AS base_price",
+      columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
+      columns.has("sale_price") ? "p.sale_price" : "0 AS sale_price",
+      columns.has("weight") ? "p.weight" : "0 AS weight",
+      columns.has("barcode") ? "p.barcode" : "'' AS barcode",
+      columns.has("image_url") ? "p.image_url" : "'' AS image_url",
+      "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
+      "COALESCE(gu.global_quantity, 0) AS global_quantity",
     ].join(", ");
-    const all = sqliteRows(db, `SELECT ${select} FROM products ORDER BY description ASC LIMIT 2000`);
-    return all
+    const hasCustomerSummary = tableExists(db, "customer_product_summary");
+    const hasSalesRaw = tableExists(db, "sales_raw");
+    const customerUsage = hasCustomerSummary
+      ? "SELECT sku, SUM(quantity) AS customer_quantity FROM customer_product_summary WHERE customer_no = ? GROUP BY sku"
+      : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS customer_quantity FROM sales_raw WHERE customer_no = ? GROUP BY sku" : "SELECT '' AS sku, 0 AS customer_quantity WHERE 0");
+    const globalUsage = hasCustomerSummary
+      ? "SELECT sku, SUM(quantity) AS global_quantity FROM customer_product_summary GROUP BY sku"
+      : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS global_quantity FROM sales_raw GROUP BY sku" : "SELECT '' AS sku, 0 AS global_quantity WHERE 0");
+    const all = sqliteRows(db, `
+      SELECT ${select}
+      FROM products p
+      LEFT JOIN (${customerUsage}) cu ON cu.sku = p.sku
+      LEFT JOIN (${globalUsage}) gu ON gu.sku = p.sku
+      ORDER BY COALESCE(cu.customer_quantity, 0) DESC, COALESCE(gu.global_quantity, 0) DESC, p.description ASC
+      LIMIT 3000
+    `, hasCustomerSummary || hasSalesRaw ? [session.customer_no] : []);
+    const suppliers = [...new Set(all.map((row) => String(row.supplier || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const categories = [...new Set(all.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const filtered = all
       .filter((row) => {
         if (!query) return true;
         return [row.sku, row.description, row.category, row.supplier, row.barcode]
           .some((value) => String(value || "").toLowerCase().includes(query));
       })
+      .filter((row) => !supplier || String(row.supplier || "") === supplier)
+      .filter((row) => !category || String(row.category || "") === category)
+      .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || !all.some((candidate) => numberValue(candidate.customer_quantity) > 0))
+      .filter((row) => section !== "deals" || (numberValue(row.sale_price) > 0 && numberValue(row.base_price) > numberValue(row.sale_price)))
       .slice(0, limit)
       .map((row) => ({
         sku: String(row.sku || ""),
@@ -1398,10 +1428,18 @@ async function handleCustomerProducts(req, res) {
         standard_cost: numberValue(row.standard_cost),
         weight: numberValue(row.weight),
         image_url: String(row.image_url || ""),
+        customer_quantity: numberValue(row.customer_quantity),
+        global_quantity: numberValue(row.global_quantity),
       }));
+    return {
+      rows: filtered,
+      suppliers,
+      categories,
+      hasCustomerHistory: all.some((row) => numberValue(row.customer_quantity) > 0),
+    };
   });
 
-  sendJson(res, 200, { ok: true, rows });
+  sendJson(res, 200, { ok: true, ...result });
 }
 
 async function handleCustomerOrder(payload, req, res) {
