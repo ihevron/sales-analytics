@@ -6,10 +6,10 @@
     <title>מערכת ניהול מכירות ולקוחות</title>
     <link rel="icon" type="image/png" href="./wa-logo.png" />
     <link rel="apple-touch-icon" href="./wa-logo.png" />
-    <link rel="stylesheet" href="./styles.css?v=20260617processbulk2" />
+    <link rel="stylesheet" href="./styles.css?v=20260618processflow" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260617processbulk2"></script>
+    <script defer src="./app.js?v=20260618processflow"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -230,10 +230,22 @@
               <input id="history-query" type="search" placeholder="חיפוש לפי לקוח או מספר הזמנה" />
             </div>
             <div class="process-tabs" id="process-tabs">
+              <button class="active" data-process-tab="orders">הזמנות פעילות</button>
               <button class="active" data-process-tab="pending">ממתינות לליקוט</button>
               <button data-process-tab="picked">הזמנות שלוקטו</button>
               <button data-process-tab="shipping">מוכן למשלוח</button>
               <button data-process-tab="missed">הזמנות שהוחמצו</button>
+            </div>
+            <div class="process-pane active" data-process-pane="orders">
+              <div class="bulk-order-actions">
+                <button class="secondary-action" id="export-selected-priority" type="button">יצוא נבחרים לפריוריטי</button>
+                <button class="secondary-action" id="mark-selected-picked" type="button">סמן שלוקט</button>
+                <button class="primary-action" id="mark-selected-invoices-printed" type="button">מוכן למשלוח</button>
+                <button class="primary-action" id="mark-selected-shipped" type="button">סמן שנשלח</button>
+                <button class="secondary-action" id="select-all-picked-orders" type="button">סמן הכל</button>
+                <button class="secondary-action" id="clear-selected-orders" type="button">בטל סימון</button>
+              </div>
+              <div class="table-wrap"><table id="process-orders-table"></table></div>
             </div>
             <div class="process-pane active" data-process-pane="pending">
               <div class="table-wrap"><table id="process-pending-table"></table></div>

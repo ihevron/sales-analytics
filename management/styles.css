@@ -2359,3 +2359,59 @@ td small {
   font-weight: 900;
   color: var(--ink);
 }
+
+[data-process-tab="pending"],
+[data-process-tab="picked"],
+[data-process-tab="shipping"],
+[data-process-pane="pending"],
+[data-process-pane="picked"],
+[data-process-pane="shipping"] {
+  display: none !important;
+}
+
+.process-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.process-stage-check {
+  display: inline-grid;
+  place-items: center;
+}
+
+.process-stage-check input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--primary);
+}
+
+.process-customer-name {
+  display: block;
+  text-align: right;
+  font-weight: 900;
+}
+
+.missed-order-header {
+  justify-content: flex-start;
+  text-align: right;
+}
+
+.missed-order-header .missed-customer-name,
+.missed-order-header > span,
+.missed-order-header > strong {
+  margin-inline-start: 0;
+}
+
+.missed-order-actions {
+  margin-inline-start: auto;
+}
+
+.picking-order-selector {
+  display: block;
+}
+
+.picking-order-selector label {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  font-weight: 850;
+}
