@@ -19,6 +19,21 @@ const SECTION_TEXT = {
   },
 };
 
+const DEFAULT_CUSTOMER_SETTINGS = {
+  loginTitle: "כניסה למערכת ההזמנות",
+  loginSubtitle: "מזמינים בקלות, רואים מוצרים מומלצים ומבצעים, ושולחים הזמנה ישירות לחברון שיווק סלטים בע\"מ.",
+  termsText: [
+    "השימוש באתר מיועד לביצוע הזמנות מול חברון שיווק סלטים בע\"מ בלבד.",
+    "המחירים, הזמינות והאישור הסופי של ההזמנה כפופים לבדיקת החברה ולאישור ההזמנה בפועל.",
+    "שליחת הזמנה מהווה בקשה להזמנה. ייתכנו שינויים בכמות, בזמינות, במחיר ובמועד האספקה לפי מלאי ותיאום מול הלקוח.",
+    "פרטי הלקוח נשמרים לצורך טיפול בהזמנות, שירות ותיאום אספקה. אין להזין פרטי כרטיס אשראי במסך זה.",
+  ].join("\n\n"),
+  warrantyText: [
+    "האחריות לאיכות המוצרים ניתנת בהתאם לדין, לתנאי הספקים ולנהלי החברה.",
+    "יש לבדוק את הסחורה בעת קבלתה ולעדכן את החברה בסמוך לקבלה במקרה של חוסר, פגם או אי התאמה.",
+  ].join("\n\n"),
+};
+
 const state = {
   token: localStorage.getItem(TOKEN_KEY) || "",
   customer: safeJson(localStorage.getItem(CUSTOMER_KEY), null),
@@ -33,11 +48,13 @@ const state = {
   hasCustomerHistory: false,
   quantitySku: "",
   loginMode: "existing",
+  settings: { ...DEFAULT_CUSTOMER_SETTINGS },
 };
 
 document.addEventListener("DOMContentLoaded", init);
 
-function init() {
+async function init() {
+  await loadCustomerSettings();
   document.getElementById("login-form").addEventListener("submit", login);
   document.getElementById("register-form").addEventListener("submit", registerCustomer);
   document.getElementById("logout-button").addEventListener("click", logout);
@@ -65,6 +82,11 @@ function init() {
   document.getElementById("quantity-apply").addEventListener("click", applyQuantitySheet);
   document.getElementById("quantity-minus").addEventListener("click", () => adjustQuantitySheet(-1));
   document.getElementById("quantity-plus").addEventListener("click", () => adjustQuantitySheet(1));
+  document.getElementById("quantity-select").addEventListener("change", (event) => {
+    if (!state.quantitySku) return;
+    setQuantity(state.quantitySku, Number(event.target.value) || 0);
+    closeQuantitySheet();
+  });
   document.getElementById("quantity-input").addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -96,6 +118,26 @@ function init() {
     showLogin();
   }
   renderCart();
+}
+
+async function loadCustomerSettings() {
+  try {
+    const response = await fetch("/api/customer/settings", { cache: "no-store" });
+    const data = await response.json();
+    if (data && data.ok && data.settings) {
+      state.settings = { ...DEFAULT_CUSTOMER_SETTINGS, ...data.settings };
+    }
+  } catch {
+    state.settings = { ...DEFAULT_CUSTOMER_SETTINGS };
+  }
+  applyCustomerSettings();
+}
+
+function applyCustomerSettings() {
+  document.getElementById("login-title").textContent = state.settings.loginTitle || DEFAULT_CUSTOMER_SETTINGS.loginTitle;
+  document.getElementById("login-subtitle").textContent = state.settings.loginSubtitle || DEFAULT_CUSTOMER_SETTINGS.loginSubtitle;
+  document.getElementById("terms-text").textContent = state.settings.termsText || DEFAULT_CUSTOMER_SETTINGS.termsText;
+  document.getElementById("warranty-text").textContent = state.settings.warrantyText || DEFAULT_CUSTOMER_SETTINGS.warrantyText;
 }
 
 function safeJson(raw, fallback) {
@@ -397,8 +439,12 @@ function setQuantity(sku, quantity) {
 
 function fillQuantityOptions() {
   const options = document.getElementById("quantity-options");
+  const select = document.getElementById("quantity-select");
   options.innerHTML = Array.from({ length: 31 }, (_, value) => `
     <button type="button" data-quantity="${value}" role="option">${value}</button>
+  `).join("");
+  select.innerHTML = Array.from({ length: 101 }, (_, value) => `
+    <option value="${value}">${value}</option>
   `).join("");
   options.querySelectorAll("[data-quantity]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -416,6 +462,11 @@ function openQuantitySheet(sku) {
   const quantity = Math.min(999, Math.max(0, state.cart[sku]?.quantity || 0));
   document.getElementById("quantity-product-name").textContent = product.description || sku;
   document.getElementById("quantity-input").value = String(quantity);
+  const select = document.getElementById("quantity-select");
+  if (!select.querySelector(`option[value="${quantity}"]`)) {
+    select.append(new Option(String(quantity), String(quantity)));
+  }
+  select.value = String(quantity);
   document.getElementById("quantity-sheet").hidden = false;
   document.body.classList.add("quantity-open");
   markQuantityOption(quantity);
@@ -435,12 +486,18 @@ function markQuantityOption(quantity) {
   document.querySelectorAll(".quantity-options [data-quantity]").forEach((button) => {
     button.classList.toggle("selected", Number(button.dataset.quantity) === Number(quantity));
   });
+  const select = document.getElementById("quantity-select");
+  if (select?.querySelector(`option[value="${quantity}"]`)) select.value = String(quantity);
 }
 
 function adjustQuantitySheet(delta) {
   const input = document.getElementById("quantity-input");
   const next = Math.min(999, Math.max(0, Number(input.value || 0) + delta));
   input.value = String(next);
+  const select = document.getElementById("quantity-select");
+  if (!select.querySelector(`option[value="${next}"]`)) {
+    select.append(new Option(String(next), String(next)));
+  }
   markQuantityOption(next);
 }
 

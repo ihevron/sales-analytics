@@ -630,6 +630,13 @@ select:focus {
   margin-bottom: 16px;
   color: var(--muted);
   line-height: 1.65;
+  white-space: pre-line;
+}
+
+.terms-copy h3 {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 16px;
 }
 
 .terms-copy p {
@@ -648,6 +655,22 @@ select:focus {
 .quantity-sheet-card h2 {
   margin: 0 44px 16px 0;
   font-size: 18px;
+}
+
+.quantity-select-label {
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+
+.quantity-select-label select {
+  height: 58px;
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-size: 22px;
+  font-weight: 900;
+  text-align: center;
+  text-align-last: center;
 }
 
 .quantity-options {
@@ -818,6 +841,25 @@ body.terms-open {
   .quantity-display {
     min-width: 46px;
     padding-inline: 6px;
+  }
+
+  .quantity-sheet {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .quantity-sheet-card {
+    width: 100%;
+    border-radius: 18px 18px 8px 8px;
+  }
+
+  .quantity-select-label select {
+    height: 64px;
+    font-size: 24px;
+  }
+
+  .quantity-options {
+    display: none;
   }
 
   .catalog-panel,

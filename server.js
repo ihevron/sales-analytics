@@ -31,6 +31,21 @@ const priceAuditService = createPriceAuditService({
   serviceKey: postgresPreviewKey || supabaseServiceRoleKey,
 });
 
+const CUSTOMER_APP_SETTING_DEFAULTS = {
+  customer_login_title: "כניסה למערכת ההזמנות",
+  customer_login_subtitle: "מזמינים בקלות, רואים מוצרים מומלצים ומבצעים, ושולחים הזמנה ישירות לחברון שיווק סלטים בע\"מ.",
+  customer_terms_text: [
+    "השימוש באתר מיועד לביצוע הזמנות מול חברון שיווק סלטים בע\"מ בלבד.",
+    "המחירים, הזמינות והאישור הסופי של ההזמנה כפופים לבדיקת החברה ולאישור ההזמנה בפועל.",
+    "שליחת הזמנה מהווה בקשה להזמנה. ייתכנו שינויים בכמות, בזמינות, במחיר ובמועד האספקה לפי מלאי ותיאום מול הלקוח.",
+    "פרטי הלקוח נשמרים לצורך טיפול בהזמנות, שירות ותיאום אספקה. אין להזין פרטי כרטיס אשראי במסך זה.",
+  ].join("\n\n"),
+  customer_warranty_text: [
+    "האחריות לאיכות המוצרים ניתנת בהתאם לדין, לתנאי הספקים ולנהלי החברה.",
+    "יש לבדוק את הסחורה בעת קבלתה ולעדכן את החברה בסמוך לקבלה במקרה של חוסר, פגם או אי התאמה.",
+  ].join("\n\n"),
+};
+
 const types = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -340,6 +355,39 @@ async function withCurrentSqliteDatabase(task) {
   } finally {
     db.close();
   }
+}
+
+async function handleCustomerSettings(res) {
+  const values = { ...CUSTOMER_APP_SETTING_DEFAULTS };
+  try {
+    await withCurrentSqliteDatabase((db) => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS app_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `);
+      sqliteRows(db, "SELECT key, value FROM app_metadata WHERE key IN (?, ?, ?, ?)", [
+        "customer_login_title",
+        "customer_login_subtitle",
+        "customer_terms_text",
+        "customer_warranty_text",
+      ]).forEach((row) => {
+        if (row.key && typeof row.value === "string" && row.value.trim()) values[row.key] = row.value;
+      });
+    });
+  } catch (error) {
+    console.error("customer settings lookup failed", error);
+  }
+  sendJson(res, 200, {
+    ok: true,
+    settings: {
+      loginTitle: values.customer_login_title,
+      loginSubtitle: values.customer_login_subtitle,
+      termsText: values.customer_terms_text,
+      warrantyText: values.customer_warranty_text,
+    },
+  });
 }
 
 function findPriceAuditProductInSqliteDb(db, input = {}) {
@@ -1816,6 +1864,14 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/customer/register" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleCustomerRegister(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/customer/settings" && req.method === "GET") {
+    handleCustomerSettings(res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "customer settings failed" });
+    });
     return;
   }
 

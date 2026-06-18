@@ -5,16 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618e" />
-    <script defer src="./customer.js?v=20260618e"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260618f" />
+    <script defer src="./customer.js?v=20260618f"></script>
   </head>
   <body>
     <main class="customer-shell">
       <section id="login-view" class="login-view">
         <div class="login-card">
           <img src="./management/wa-logo.png" alt="" class="login-logo" />
-          <h1>כניסה להזמנה</h1>
-          <p>לקוחות קיימים נכנסים עם מספר לקוח וח.פ. לקוחות חדשים יכולים לפתוח הזמנה ראשונה.</p>
+          <h1 id="login-title">כניסה למערכת ההזמנות</h1>
+          <p id="login-subtitle">מזמינים בקלות, רואים מוצרים מומלצים ומבצעים, ושולחים הזמנה ישירות לחברון שיווק סלטים בע"מ.</p>
 
           <div class="login-tabs" role="tablist" aria-label="בחירת סוג כניסה">
             <button id="login-tab-existing" class="active" type="button" data-login-mode="existing">לקוח קיים</button>
@@ -133,9 +133,10 @@
         <div class="terms-card">
           <h2>אישור תנאי שימוש</h2>
           <div class="terms-copy">
-            <p>השימוש באתר מיועד לביצוע הזמנות מול מעדניית רנה בלבד. המחירים, הזמינות והאישור הסופי של ההזמנה כפופים לבדיקת העסק.</p>
-            <p>שליחת הזמנה מהווה בקשה להזמנה. ייתכנו שינויים בכמות, בזמינות, במחיר ובמועד האספקה לפי מלאי ותיאום מול הלקוח.</p>
-            <p>פרטי הלקוח נשמרים לצורך טיפול בהזמנות, שירות ותיאום אספקה. אין להזין פרטי כרטיס אשראי במסך זה.</p>
+            <h3>תנאי שימוש</h3>
+            <div id="terms-text"></div>
+            <h3>תנאי ערבות ואחריות</h3>
+            <div id="warranty-text"></div>
           </div>
           <label class="checkbox-line">
             <input id="terms-accept" type="checkbox" />
@@ -150,6 +151,10 @@
         <div class="quantity-sheet-card">
           <button id="close-quantity-sheet" class="cart-close" type="button" aria-label="סגירה">×</button>
           <h2 id="quantity-product-name">בחירת כמות</h2>
+          <label class="quantity-select-label">
+            בחירה מהירה
+            <select id="quantity-select" aria-label="בחירת כמות"></select>
+          </label>
           <div id="quantity-options" class="quantity-options" role="listbox" aria-label="כמות"></div>
           <div class="quantity-manual">
             <button id="quantity-minus" type="button" aria-label="הפחתת כמות">−</button>

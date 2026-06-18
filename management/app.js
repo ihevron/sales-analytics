@@ -98,6 +98,7 @@ const screens = {
   calls: { title: "ניהול שיחות", subtitle: "תיעוד שיחות לקוח" },
   products: { title: "מוצרים", subtitle: "חיפוש וסינון מוצרים" },
   reports: { title: "דוחות", subtitle: "בדיקת חשבוניות ודוחות תפעוליים" },
+  "customer-app": { title: "אפליקציית לקוחות", subtitle: "ניהול נוסחים, מבצעים ולקוחות להזמנות אונליין" },
   recommendations: { title: "המלצות מכירה", subtitle: "ניהול המלצות פעילות לכרטיס לקוח" },
 };
 
@@ -111,7 +112,23 @@ const screenIcons = {
   calls: "📞",
   products: "📦",
   reports: "📊",
+  "customer-app": "🛒",
   recommendations: "📊",
+};
+
+const customerAppDefaults = {
+  customer_login_title: "כניסה למערכת ההזמנות",
+  customer_login_subtitle: "מזמינים בקלות, רואים מוצרים מומלצים ומבצעים, ושולחים הזמנה ישירות לחברון שיווק סלטים בע\"מ.",
+  customer_terms_text: [
+    "השימוש באתר מיועד לביצוע הזמנות מול חברון שיווק סלטים בע\"מ בלבד.",
+    "המחירים, הזמינות והאישור הסופי של ההזמנה כפופים לבדיקת החברה ולאישור ההזמנה בפועל.",
+    "שליחת הזמנה מהווה בקשה להזמנה. ייתכנו שינויים בכמות, בזמינות, במחיר ובמועד האספקה לפי מלאי ותיאום מול הלקוח.",
+    "פרטי הלקוח נשמרים לצורך טיפול בהזמנות, שירות ותיאום אספקה. אין להזין פרטי כרטיס אשראי במסך זה.",
+  ].join("\n\n"),
+  customer_warranty_text: [
+    "האחריות לאיכות המוצרים ניתנת בהתאם לדין, לתנאי הספקים ולנהלי החברה.",
+    "יש לבדוק את הסחורה בעת קבלתה ולעדכן את החברה בסמוך לקבלה במקרה של חוסר, פגם או אי התאמה.",
+  ].join("\n\n"),
 };
 
 const salesColumns = {
@@ -474,6 +491,11 @@ function bindEvents() {
   document.getElementById("save-call-template").addEventListener("click", saveCurrentCallTemplate);
   document.getElementById("new-call-template").addEventListener("click", startNewCallTemplate);
   document.getElementById("delete-call-template").addEventListener("click", deleteCurrentCallTemplate);
+  document.getElementById("save-customer-app-settings").addEventListener("click", saveCustomerAppSettings);
+  document.getElementById("save-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(false));
+  document.getElementById("clear-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(true));
+  document.getElementById("load-customer-app-customer").addEventListener("click", loadCustomerAppCustomer);
+  document.getElementById("save-customer-app-customer").addEventListener("click", saveCustomerAppCustomer);
   document.getElementById("customer-search-button").addEventListener("click", searchCustomers);
   document.getElementById("customer-query").addEventListener("input", debounce(searchCustomers, 250));
   ["customer-supplier-filter", "customer-category-filter", "customer-product-filter"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
@@ -602,6 +624,8 @@ async function refreshAll() {
   await renderOrderHistory();
   refreshCallCustomerSelect();
   await renderCalls();
+  renderCustomerAppSettings();
+  renderCustomerAppPromotions();
   renderRecommendations();
 }
 
@@ -625,6 +649,10 @@ function showScreen(id) {
   if (id === "picking") renderPicking();
   if (id === "order-history") renderOrderHistory();
   if (id === "calls") renderCalls();
+  if (id === "customer-app") {
+    renderCustomerAppSettings();
+    renderCustomerAppPromotions();
+  }
   if (id === "recommendations") renderRecommendations();
 }
 
@@ -4800,6 +4828,155 @@ async function deleteRecommendation(id) {
   state.db.run("DELETE FROM sales_recommendations WHERE id = ?", [id]);
   await persistDatabase();
   renderRecommendations();
+}
+
+function getAppMetadata(key) {
+  return firstRow("SELECT value FROM app_metadata WHERE key = ?", [key]).value || customerAppDefaults[key] || "";
+}
+
+function setAppMetadata(key, value) {
+  state.db.run(`
+    INSERT INTO app_metadata (key, value)
+    VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `, [key, String(value ?? "")]);
+}
+
+function renderCustomerAppSettings() {
+  const title = document.getElementById("customer-app-login-title");
+  if (!title) return;
+  title.value = getAppMetadata("customer_login_title");
+  document.getElementById("customer-app-login-subtitle").value = getAppMetadata("customer_login_subtitle");
+  document.getElementById("customer-app-terms-text").value = getAppMetadata("customer_terms_text");
+  document.getElementById("customer-app-warranty-text").value = getAppMetadata("customer_warranty_text");
+}
+
+async function saveCustomerAppSettings() {
+  setAppMetadata("customer_login_title", text(document.getElementById("customer-app-login-title").value));
+  setAppMetadata("customer_login_subtitle", text(document.getElementById("customer-app-login-subtitle").value));
+  setAppMetadata("customer_terms_text", text(document.getElementById("customer-app-terms-text").value));
+  setAppMetadata("customer_warranty_text", text(document.getElementById("customer-app-warranty-text").value));
+  const result = await persistDatabase();
+  document.getElementById("customer-app-settings-status").textContent = result.server.ok ? "הנוסחים נשמרו" : "נשמר בדפדפן בלבד";
+}
+
+function renderCustomerAppPromotions() {
+  const table = document.getElementById("customer-app-promotions-table");
+  if (!table) return;
+  ensureColumn("products", "promo_price", "REAL DEFAULT 0");
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  const rows = queryRows(`
+    SELECT sku, description, supplier, category, sale_price, promo_price, promo_discount_percent
+    FROM products
+    WHERE COALESCE(promo_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0
+    ORDER BY updated_at DESC, description ASC
+    LIMIT 50
+  `);
+  renderTable("customer-app-promotions-table", rows, [
+    { key: "sku", label: "מק״ט" },
+    { key: "description", label: "מוצר" },
+    { key: "supplier", label: "ספק" },
+    { key: "category", label: "קטגוריה" },
+    { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "promo_price", label: "מחיר מבצע", format: currency2 },
+    { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
+  ], "customer-app-promotions", "description", "asc");
+}
+
+async function saveCustomerAppPromo(clearPromo = false) {
+  ensureColumn("products", "promo_price", "REAL DEFAULT 0");
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  const status = document.getElementById("customer-app-promo-status");
+  const sku = text(document.getElementById("customer-app-promo-sku").value);
+  if (!sku) {
+    status.textContent = "יש להזין מק״ט";
+    return;
+  }
+  const product = firstRow("SELECT sku FROM products WHERE sku = ?", [sku]);
+  if (!product.sku) {
+    status.textContent = "לא נמצא מוצר במק״ט הזה";
+    return;
+  }
+  const promoPrice = clearPromo ? 0 : number(document.getElementById("customer-app-promo-price").value);
+  const promoDiscount = clearPromo ? 0 : number(document.getElementById("customer-app-promo-discount").value);
+  state.db.run(`
+    UPDATE products
+    SET promo_price = ?, promo_discount_percent = ?, updated_at = ?
+    WHERE sku = ?
+  `, [promoPrice, promoDiscount, new Date().toISOString(), sku]);
+  const result = await persistDatabase();
+  status.textContent = result.server.ok ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר") : "נשמר בדפדפן בלבד";
+  renderCustomerAppPromotions();
+  if (document.getElementById("products")?.classList.contains("active-screen")) await renderProducts();
+}
+
+function loadCustomerAppCustomer() {
+  const status = document.getElementById("customer-app-customer-status");
+  const customerNo = text(document.getElementById("customer-app-customer-no").value);
+  if (!customerNo) {
+    status.textContent = "יש להזין מספר לקוח";
+    return;
+  }
+  const row = firstRow(`
+    SELECT customer_no, customer_name, company_id, phone, address
+    FROM customer_call_profiles
+    WHERE customer_no = ?
+    LIMIT 1
+  `, [customerNo]);
+  if (!row.customer_no) {
+    status.textContent = "לא נמצא לקוח. אפשר למלא פרטים ולשמור כלקוח חדש";
+    document.getElementById("customer-app-customer-name").value = "";
+    document.getElementById("customer-app-company-id").value = "";
+    document.getElementById("customer-app-phone").value = "";
+    document.getElementById("customer-app-address").value = "";
+    return;
+  }
+  document.getElementById("customer-app-customer-name").value = row.customer_name || "";
+  document.getElementById("customer-app-company-id").value = row.company_id || "";
+  document.getElementById("customer-app-phone").value = row.phone || "";
+  document.getElementById("customer-app-address").value = row.address || "";
+  status.textContent = "הלקוח נטען";
+}
+
+async function saveCustomerAppCustomer() {
+  const status = document.getElementById("customer-app-customer-status");
+  const customerNo = text(document.getElementById("customer-app-customer-no").value);
+  const customerName = text(document.getElementById("customer-app-customer-name").value);
+  if (!customerNo || !customerName) {
+    status.textContent = "יש להזין מספר ושם לקוח";
+    return;
+  }
+  const existing = firstRow("SELECT source, days, contact, phone2, city, terms_accepted_at, customer_type FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
+  state.db.run(`
+    INSERT INTO customer_call_profiles (
+      customer_no, customer_name, contact, phone, phone2, city, address, company_id,
+      terms_accepted_at, customer_type, days, source, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(customer_no) DO UPDATE SET
+      customer_name = excluded.customer_name,
+      phone = excluded.phone,
+      address = excluded.address,
+      company_id = excluded.company_id,
+      updated_at = excluded.updated_at
+  `, [
+    customerNo,
+    customerName,
+    existing.contact || "",
+    text(document.getElementById("customer-app-phone").value),
+    existing.phone2 || "",
+    existing.city || "",
+    text(document.getElementById("customer-app-address").value),
+    text(document.getElementById("customer-app-company-id").value),
+    existing.terms_accepted_at || "",
+    existing.customer_type || "existing",
+    existing.days || "",
+    existing.source || "customer_portal",
+    new Date().toISOString(),
+  ]);
+  const result = await persistDatabase();
+  status.textContent = result.server.ok ? "הלקוח נשמר" : "נשמר בדפדפן בלבד";
+  refreshCallCustomerSelect();
 }
 
 function resetRecommendationForm() {

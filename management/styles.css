@@ -205,6 +205,31 @@ button { cursor: pointer; }
   margin-top: 18px;
 }
 
+.customer-app-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.customer-app-form {
+  display: grid;
+  gap: 14px;
+}
+
+.customer-app-form.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.customer-app-form textarea {
+  min-height: 96px;
+  line-height: 1.6;
+}
+
+.customer-app-form .form-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+}
+
 .table-wrap {
   width: 100%;
   overflow: auto;
@@ -1464,7 +1489,7 @@ ul {
 
 @media (max-width: 1180px) {
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .two-column, .three-column { grid-template-columns: 1fr; }
+  .two-column, .three-column, .customer-app-form.compact { grid-template-columns: 1fr; }
   .inline-form { grid-template-columns: 1fr 1fr; }
 }
 
