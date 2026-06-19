@@ -5164,12 +5164,34 @@ function showCustomerAppTab(tab) {
 }
 
 async function saveCustomerAppSettings() {
-  setAppMetadata("customer_login_title", text(document.getElementById("customer-app-login-title").value));
-  setAppMetadata("customer_login_subtitle", text(document.getElementById("customer-app-login-subtitle").value));
-  setAppMetadata("customer_terms_text", text(document.getElementById("customer-app-terms-text").value));
-  setAppMetadata("customer_warranty_text", text(document.getElementById("customer-app-warranty-text").value));
-  const result = await persistDatabase();
-  document.getElementById("customer-app-settings-status").textContent = result.server.ok ? "הנוסחים נשמרו" : "נשמר בדפדפן בלבד";
+  const values = {
+    customer_login_title: text(document.getElementById("customer-app-login-title").value),
+    customer_login_subtitle: text(document.getElementById("customer-app-login-subtitle").value),
+    customer_terms_text: text(document.getElementById("customer-app-terms-text").value),
+    customer_warranty_text: text(document.getElementById("customer-app-warranty-text").value),
+  };
+  Object.entries(values).forEach(([key, value]) => setAppMetadata(key, value));
+  const data = state.db.export();
+  await writeBrowserDatabase(data);
+  const server = await saveCustomerAppSettingsToServer(values);
+  updateServerSaveStatus(server);
+  document.getElementById("customer-app-settings-status").textContent = server.ok ? "הנוסחים נשמרו" : "נשמר בדפדפן בלבד";
+}
+
+async function saveCustomerAppSettingsToServer(values) {
+  try {
+    const response = await fetch("/api/customer/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.ok) return { ok: true };
+    return { ok: false, error: data.error || "שמירת נוסחים נכשלה" };
+  } catch (error) {
+    console.warn("לא ניתן לשמור נוסחי לקוח בשרת", error);
+    return { ok: false, error: error.message };
+  }
 }
 
 function renderCustomerAppPromotions() {

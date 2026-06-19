@@ -8,15 +8,15 @@ const FALLBACK_IMAGE = "./management/wa-logo.png";
 const SECTION_TEXT = {
   recommended: {
     title: "המומלצים שלי",
-    subtitle: "מוצרים שהלקוח קונה בדרך כלל, או הנמכרים ביותר אם אין היסטוריה קודמת.",
+    subtitle: "",
   },
   deals: {
     title: "מבצעים",
-    subtitle: "מוצרים עם מחיר מבצע או אחוז הנחה כאשר קיימים נתוני מבצע במערכת.",
+    subtitle: "",
   },
   all: {
     title: "כל המוצרים",
-    subtitle: "קטלוג מלא, ממוין לפי המוצרים הנמכרים ביותר.",
+    subtitle: "",
   },
 };
 
@@ -389,10 +389,11 @@ function updateNavigation() {
     button.classList.toggle("active", button.dataset.section === state.section);
   });
   const text = SECTION_TEXT[state.section] || SECTION_TEXT.all;
+  const subtitle = state.category ? "" : text.subtitle;
   document.getElementById("section-title").textContent = state.category || text.title;
-  document.getElementById("section-subtitle").textContent = state.section === "recommended" && !state.hasCustomerHistory
-    ? "עדיין אין היסטוריה ללקוח הזה, לכן מוצגים המוצרים הנמכרים ביותר בכלל."
-    : text.subtitle;
+  const subtitleElement = document.getElementById("section-subtitle");
+  subtitleElement.textContent = subtitle;
+  subtitleElement.hidden = !subtitle;
 }
 
 function renderProducts() {

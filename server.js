@@ -409,6 +409,60 @@ async function handleCustomerSettings(res) {
   });
 }
 
+async function handleCustomerSettingsSave(payload, res) {
+  const allowedKeys = [
+    "customer_login_title",
+    "customer_login_subtitle",
+    "customer_terms_text",
+    "customer_warranty_text",
+  ];
+  const values = {};
+  allowedKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(payload || {}, key)) {
+      values[key] = String(payload[key] ?? "");
+    }
+  });
+  if (!Object.keys(values).length) {
+    sendJson(res, 400, { ok: false, error: "missing settings" });
+    return;
+  }
+
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS app_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    Object.entries(values).forEach(([key, value]) => {
+      db.run(`
+        INSERT INTO app_metadata (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `, [key, value]);
+    });
+    const exported = Buffer.from(db.export());
+    await writeCurrentDatabaseBuffer(exported);
+  } finally {
+    db.close();
+  }
+
+  const merged = { ...CUSTOMER_APP_SETTING_DEFAULTS, ...values };
+  sendJson(res, 200, {
+    ok: true,
+    settings: {
+      loginTitle: merged.customer_login_title,
+      loginSubtitle: merged.customer_login_subtitle,
+      termsText: merged.customer_terms_text,
+      warrantyText: merged.customer_warranty_text,
+      termsVersion: customerTermsVersion(merged),
+    },
+  });
+}
+
 function findPriceAuditProductInSqliteDb(db, input = {}) {
   const barcode = String(input.barcode || "").trim();
   const itemCode = String(input.itemCode || input.item_code || "").trim();
@@ -1992,6 +2046,11 @@ const server = http.createServer((req, res) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "customer settings failed" });
     });
+    return;
+  }
+
+  if (requestPath === "/api/customer/settings" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleCustomerSettingsSave(payload, res)));
     return;
   }
 
