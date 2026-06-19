@@ -1014,7 +1014,7 @@ async function updatePostgresProductSettings(skus, values) {
     });
     const data = await response.json().catch(() => ({}));
     if (data.configured === false) return data;
-    return { ok: response.ok && data.ok !== false, error: data.error || "" };
+    return { ok: response.ok && data.ok !== false, error: data.message || data.error || "" };
   } catch (error) {
     console.warn("Postgres product settings unavailable", error);
     return { ok: false, error: error.message };

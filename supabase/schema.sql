@@ -33,6 +33,18 @@ alter table public.products add column if not exists customer_recommended intege
 create index if not exists idx_products_barcode on public.products (barcode);
 create index if not exists idx_products_supplier_name on public.products (supplier);
 
+create table if not exists public.product_customer_settings (
+  sku text primary key,
+  sale_price numeric default 0,
+  promo_discount_percent numeric default 0,
+  hidden integer not null default 0,
+  customer_recommended integer not null default 0,
+  updated_at timestamptz default now()
+);
+
+create index if not exists idx_product_customer_settings_hidden on public.product_customer_settings (hidden);
+create index if not exists idx_product_customer_settings_recommended on public.product_customer_settings (customer_recommended);
+
 create table if not exists public.sales_raw (
   id bigserial primary key,
   sale_date date,

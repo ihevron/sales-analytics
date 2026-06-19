@@ -617,38 +617,63 @@ async function handlePostgresProductSettings(payload, res) {
   const skus = Array.isArray(payload.skus) ? payload.skus.map((sku) => String(sku || "").trim()).filter(Boolean) : [];
   const values = payload.values && typeof payload.values === "object" ? payload.values : {};
   const allowed = new Set(["sale_price", "promo_discount_percent", "hidden", "customer_recommended", "updated_at"]);
-  const row = {};
+  const input = {};
   Object.entries(values).forEach(([key, value]) => {
     if (!allowed.has(key)) return;
     if (key === "hidden" || key === "customer_recommended") {
-      row[key] = value === true || value === 1 || value === "1" ? 1 : 0;
+      input[key] = value === true || value === 1 || value === "1" ? 1 : 0;
       return;
     }
-    row[key] = value;
+    input[key] = value;
   });
-  row.updated_at = row.updated_at || new Date().toISOString();
-  if (!skus.length || !Object.keys(row).length) {
+  input.updated_at = input.updated_at || new Date().toISOString();
+  if (!skus.length || !Object.keys(input).length) {
     sendJson(res, 400, { ok: false, error: "skus and values are required" });
     return;
   }
 
+  const hasInput = (key) => Object.prototype.hasOwnProperty.call(input, key);
+  const existing = await existingPostgresProductSettings(skus);
+  const settingsRows = skus.map((sku) => {
+    const saved = existing.get(String(sku)) || {};
+    return {
+      sku,
+      sale_price: hasInput("sale_price") ? numberValue(input.sale_price) : numberValue(saved.sale_price),
+      promo_discount_percent: hasInput("promo_discount_percent") ? numberValue(input.promo_discount_percent) : numberValue(saved.promo_discount_percent),
+      hidden: hasInput("hidden") ? input.hidden : (numberValue(saved.hidden) ? 1 : 0),
+      customer_recommended: hasInput("customer_recommended") ? input.customer_recommended : (numberValue(saved.customer_recommended) ? 1 : 0),
+      updated_at: input.updated_at,
+    };
+  });
+
+  try {
+    for (let index = 0; index < settingsRows.length; index += 500) {
+      await postgresUpsert("product_customer_settings", settingsRows.slice(index, index + 500), "sku");
+    }
+  } catch (error) {
+    if (/product_customer_settings|schema cache|relation|does not exist|PGRST/i.test(error.message || "")) {
+      sendJson(res, 400, {
+        ok: false,
+        error: "missing product_customer_settings table",
+        message: "חסרה ב-Supabase טבלת product_customer_settings. יש להריץ את קטע ה-SQL המעודכן מתוך supabase/schema.sql ואז לשמור שוב את ההסתרות.",
+      });
+      return;
+    }
+    throw error;
+  }
+
+  const productPatch = { updated_at: input.updated_at };
+  ["sale_price", "promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
+    if (hasInput(key)) productPatch[key] = input[key];
+  });
   const results = [];
   for (const sku of skus) {
     try {
-      await postgresPatch("products", `sku=eq.${encodeURIComponent(sku)}`, row);
+      await postgresPatch("products", `sku=eq.${encodeURIComponent(sku)}`, productPatch);
       results.push({ sku, ok: true });
     } catch (error) {
-      if (!/sale_price|promo_discount_percent|hidden|customer_recommended|schema cache|column/i.test(error.message || "")) throw error;
-      const fallback = { ...row };
-      ["sale_price", "promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
-        if (new RegExp(key, "i").test(error.message || "")) delete fallback[key];
-      });
-      if (Object.keys(fallback).length <= 1) {
-        results.push({ sku, ok: false, error: error.message || "settings failed" });
-        continue;
-      }
-      await postgresPatch("products", `sku=eq.${encodeURIComponent(sku)}`, fallback);
-      results.push({ sku, ok: true, fallback: true });
+      console.warn("product settings saved, products mirror skipped", sku, error.message || error);
+      results.push({ sku, ok: true, settings: true, products: false });
     }
   }
   sendJson(res, 200, { ok: true, source: "postgres", updated: results.filter((item) => item.ok).length, results });
@@ -656,15 +681,31 @@ async function handlePostgresProductSettings(payload, res) {
 
 async function existingPostgresProductSettings(skus) {
   const settings = new Map();
+  const isMissingSettingsTable = (error) => /product_customer_settings|schema cache|relation|does not exist|PGRST/i.test(error.message || "");
   for (let index = 0; index < skus.length; index += 150) {
-    const chunk = skus.slice(index, index + 150).map((sku) => `"${String(sku).replaceAll('"', '\\"')}"`).join(",");
+    const chunkSkus = skus.slice(index, index + 150).map((sku) => String(sku || "").trim()).filter(Boolean);
+    const chunk = chunkSkus.map((sku) => `"${sku.replaceAll('"', '\\"')}"`).join(",");
+    let missingSkus = chunkSkus;
     try {
-      const rows = await postgresRows(`products?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${chunk})&limit=1000`);
+      const rows = await postgresRows(`product_customer_settings?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${chunk})&limit=1000`);
       rows.forEach((row) => settings.set(String(row.sku), row));
+      missingSkus = chunkSkus.filter((sku) => !settings.has(String(sku)));
+    } catch (error) {
+      if (!isMissingSettingsTable(error)) throw error;
+    }
+    if (!missingSkus.length) continue;
+    const fallbackChunk = missingSkus.map((sku) => `"${sku.replaceAll('"', '\\"')}"`).join(",");
+    try {
+      const rows = await postgresRows(`products?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${fallbackChunk})&limit=1000`);
+      rows.forEach((row) => {
+        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
+      });
     } catch (error) {
       if (!/promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rows = await postgresRows(`products?select=sku,sale_price&sku=in.(${chunk})&limit=1000`);
-      rows.forEach((row) => settings.set(String(row.sku), row));
+      const rows = await postgresRows(`products?select=sku,sale_price&sku=in.(${fallbackChunk})&limit=1000`);
+      rows.forEach((row) => {
+        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
+      });
     }
   }
   return settings;
