@@ -312,6 +312,14 @@ function createSharedSchema() {
       text TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS product_customer_settings (
+      sku TEXT PRIMARY KEY,
+      sale_price REAL DEFAULT 0,
+      promo_discount_percent REAL DEFAULT 0,
+      hidden INTEGER NOT NULL DEFAULT 0,
+      customer_recommended INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS app_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -402,6 +410,7 @@ function createManagementSchema() {
   ensureColumn("products", "units_per_carton", "REAL DEFAULT 1");
   ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  ensureProductCustomerSettings();
   ensureColumn("customer_calls", "call_again_time", "TEXT");
   ensureColumn("customer_calls", "whatsapp_sent_at", "TEXT");
   ensureColumn("customer_calls", "manual_order_id", "INTEGER");
@@ -431,6 +440,74 @@ function createManagementSchema() {
 function ensureColumn(table, column, definition) {
   const exists = queryRows(`PRAGMA table_info(${table})`).some((row) => row.name === column);
   if (!exists) state.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function ensureProductCustomerSettings() {
+  state.db.run(`
+    CREATE TABLE IF NOT EXISTS product_customer_settings (
+      sku TEXT PRIMARY KEY,
+      sale_price REAL DEFAULT 0,
+      promo_discount_percent REAL DEFAULT 0,
+      hidden INTEGER NOT NULL DEFAULT 0,
+      customer_recommended INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  const now = new Date().toISOString();
+  state.db.run(`
+    INSERT OR IGNORE INTO product_customer_settings
+    (sku, sale_price, promo_discount_percent, hidden, customer_recommended, updated_at)
+    SELECT sku,
+      COALESCE(sale_price, 0),
+      COALESCE(promo_discount_percent, 0),
+      COALESCE(hidden, 0),
+      COALESCE(customer_recommended, 0),
+      COALESCE(updated_at, ?)
+    FROM products
+    WHERE COALESCE(sku, '') <> ''
+      AND (
+        COALESCE(sale_price, 0) > 0
+        OR COALESCE(promo_discount_percent, 0) > 0
+        OR COALESCE(hidden, 0) <> 0
+        OR COALESCE(customer_recommended, 0) <> 0
+      )
+  `, [now]);
+}
+
+function productCustomerSettingsMap() {
+  ensureProductCustomerSettings();
+  return new Map(queryRows(`
+    SELECT sku, sale_price, promo_discount_percent, hidden, customer_recommended
+    FROM product_customer_settings
+  `).map((row) => [String(row.sku || ""), {
+    sale_price: number(row.sale_price),
+    promo_discount_percent: number(row.promo_discount_percent),
+    hidden: number(row.hidden) ? 1 : 0,
+    customer_recommended: number(row.customer_recommended) ? 1 : 0,
+  }]));
+}
+
+function saveProductCustomerSetting(sku, values) {
+  if (!sku) return;
+  ensureProductCustomerSettings();
+  const existing = firstRow("SELECT sale_price, promo_discount_percent, hidden, customer_recommended FROM product_customer_settings WHERE sku = ?", [sku]);
+  const next = {
+    sale_price: Object.hasOwn(values, "sale_price") ? number(values.sale_price) : number(existing.sale_price),
+    promo_discount_percent: Object.hasOwn(values, "promo_discount_percent") ? number(values.promo_discount_percent) : number(existing.promo_discount_percent),
+    hidden: Object.hasOwn(values, "hidden") ? (number(values.hidden) ? 1 : 0) : (number(existing.hidden) ? 1 : 0),
+    customer_recommended: Object.hasOwn(values, "customer_recommended") ? (number(values.customer_recommended) ? 1 : 0) : (number(existing.customer_recommended) ? 1 : 0),
+  };
+  state.db.run(`
+    INSERT INTO product_customer_settings
+    (sku, sale_price, promo_discount_percent, hidden, customer_recommended, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sku) DO UPDATE SET
+      sale_price = excluded.sale_price,
+      promo_discount_percent = excluded.promo_discount_percent,
+      hidden = excluded.hidden,
+      customer_recommended = excluded.customer_recommended,
+      updated_at = excluded.updated_at
+  `, [sku, next.sale_price, next.promo_discount_percent, next.hidden, next.customer_recommended, new Date().toISOString()]);
 }
 
 function rebuildSummaryTables() {
@@ -827,13 +904,7 @@ function importProductRows(rows) {
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "sale_price", "REAL DEFAULT 0");
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
-  const existingProductSettings = new Map(queryRows("SELECT sku, hidden, customer_recommended, sale_price, promo_discount_percent FROM products")
-    .map((row) => [String(row.sku || ""), {
-      hidden: number(row.hidden) ? 1 : 0,
-      customer_recommended: number(row.customer_recommended) ? 1 : 0,
-      sale_price: number(row.sale_price),
-      promo_discount_percent: number(row.promo_discount_percent),
-    }]));
+  const existingProductSettings = productCustomerSettingsMap();
   const stmt = state.db.prepare(`
     INSERT INTO products
     (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, pick_order, units_per_carton, hidden, customer_recommended, updated_at)
@@ -5159,6 +5230,7 @@ async function saveCustomerAppPromo(clearPromo = false) {
     SET sale_price = ?, promo_discount_percent = ?, updated_at = ?
     WHERE sku = ?
   `, [promoPrice, promoDiscount, new Date().toISOString(), sku]);
+  saveProductCustomerSetting(sku, { sale_price: promoPrice, promo_discount_percent: promoDiscount });
   const result = await persistDatabase();
   status.textContent = result.server.ok ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר") : "נשמר בדפדפן בלבד";
   document.getElementById("customer-app-promo-sku").value = sku;
@@ -5219,6 +5291,8 @@ async function resetCustomerAppPromotions() {
   if (!confirm("לאפס את כל המבצעים במערכת?")) return;
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   state.db.run("UPDATE products SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
+  ensureProductCustomerSettings();
+  state.db.run("UPDATE product_customer_settings SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
   const result = await persistDatabase();
   document.getElementById("customer-app-promo-status").textContent = result.server.ok ? "כל המבצעים אופסו" : "נשמר בדפדפן בלבד";
   renderCustomerAppPromotions();
@@ -5449,6 +5523,7 @@ async function setCustomerAppProductsHidden(skus, hidden) {
     new Date().toISOString(),
     ...skus,
   ]);
+  skus.forEach((sku) => saveProductCustomerSetting(sku, { hidden: hidden ? 1 : 0 }));
   await persistDatabase();
   renderCustomerAppProducts();
 }
@@ -5461,6 +5536,7 @@ async function toggleCustomerAppProductRecommended(sku) {
     new Date().toISOString(),
     sku,
   ]);
+  saveProductCustomerSetting(sku, { customer_recommended: number(row.customer_recommended) ? 0 : 1 });
   await persistDatabase();
   renderCustomerAppPromotions();
   renderCustomerAppProducts();

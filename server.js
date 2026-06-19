@@ -504,6 +504,8 @@ async function handlePostgresProductsImport(payload, res) {
         supplier: String(product.supplier || "").trim(),
         pick_order: numberValue(product.pick_order) || 999999,
         units_per_carton: numberValue(product.units_per_carton) || 1,
+        hidden: numberValue(product.hidden) ? 1 : 0,
+        customer_recommended: numberValue(product.customer_recommended) ? 1 : 0,
         updated_at: now,
       };
     })
@@ -511,14 +513,6 @@ async function handlePostgresProductsImport(payload, res) {
     .map((row) => [row.sku, row])).values()];
 
   if (rows.length) {
-    const existingSettings = await existingPostgresProductSettings(rows.map((row) => row.sku));
-    rows.forEach((row) => {
-      const existing = existingSettings.get(String(row.sku)) || {};
-      if (numberValue(existing.promo_price) > 0) row.promo_price = numberValue(existing.promo_price);
-      if (numberValue(existing.promo_discount_percent) > 0) row.promo_discount_percent = numberValue(existing.promo_discount_percent);
-      if (Object.hasOwn(existing, "customer_recommended")) row.customer_recommended = numberValue(existing.customer_recommended) ? 1 : 0;
-      if (Object.hasOwn(existing, "hidden")) row.hidden = numberValue(existing.hidden) ? 1 : 0;
-    });
     await postgresRest("products?sku=not.is.null", {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
