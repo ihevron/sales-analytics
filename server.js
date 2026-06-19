@@ -1047,19 +1047,99 @@ async function readDatabaseFromSupabase() {
 }
 
 async function writeDatabaseToSupabase(body) {
+  const safeBody = await applyProductCustomerSettingsToSqliteBuffer(body);
   const response = await fetch(supabaseObjectUrl(), {
     method: "POST",
     headers: supabaseHeaders({
       "Content-Type": "application/octet-stream",
       "x-upsert": "true",
     }),
-    body,
+    body: safeBody,
   });
 
   if (!response.ok) {
     throw new Error(`supabase write failed: ${response.status} ${await response.text()}`);
   }
-  updateDatabaseBufferCache(body);
+  updateDatabaseBufferCache(safeBody);
+}
+
+async function applyProductCustomerSettingsToSqliteBuffer(body) {
+  if (!usePostgresPreview) return body;
+  let settingsRows = [];
+  try {
+    settingsRows = await postgresRows("product_customer_settings?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&limit=10000");
+  } catch (error) {
+    if (/product_customer_settings|schema cache|relation|does not exist|PGRST/i.test(error.message || "")) return body;
+    console.warn("product settings overlay skipped", error.message || error);
+    return body;
+  }
+  const effectiveRows = settingsRows.filter((row) =>
+    String(row.sku || "").trim()
+    && (
+      numberValue(row.hidden)
+      || numberValue(row.customer_recommended)
+      || numberValue(row.sale_price) > 0
+      || numberValue(row.promo_discount_percent) > 0
+    )
+  );
+  if (!effectiveRows.length) return body;
+
+  const SQL = await initServerSql();
+  const db = new SQL.Database(new Uint8Array(body));
+  try {
+    ensureServerColumn(db, "products", "sale_price", "REAL DEFAULT 0");
+    ensureServerColumn(db, "products", "promo_discount_percent", "REAL DEFAULT 0");
+    ensureServerColumn(db, "products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+    db.run(`
+      CREATE TABLE IF NOT EXISTS product_customer_settings (
+        sku TEXT PRIMARY KEY,
+        sale_price REAL DEFAULT 0,
+        promo_discount_percent REAL DEFAULT 0,
+        hidden INTEGER NOT NULL DEFAULT 0,
+        customer_recommended INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    db.run("BEGIN TRANSACTION");
+    effectiveRows.forEach((row) => {
+      const sku = String(row.sku || "").trim();
+      const salePrice = numberValue(row.sale_price);
+      const promoDiscount = numberValue(row.promo_discount_percent);
+      const hidden = numberValue(row.hidden) ? 1 : 0;
+      const recommended = numberValue(row.customer_recommended) ? 1 : 0;
+      const now = new Date().toISOString();
+      db.run(`
+        INSERT INTO product_customer_settings
+        (sku, sale_price, promo_discount_percent, hidden, customer_recommended, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(sku) DO UPDATE SET
+          sale_price = CASE WHEN excluded.sale_price > 0 THEN excluded.sale_price ELSE product_customer_settings.sale_price END,
+          promo_discount_percent = CASE WHEN excluded.promo_discount_percent > 0 THEN excluded.promo_discount_percent ELSE product_customer_settings.promo_discount_percent END,
+          hidden = CASE WHEN excluded.hidden <> 0 THEN excluded.hidden ELSE product_customer_settings.hidden END,
+          customer_recommended = CASE WHEN excluded.customer_recommended <> 0 THEN excluded.customer_recommended ELSE product_customer_settings.customer_recommended END,
+          updated_at = excluded.updated_at
+      `, [sku, salePrice, promoDiscount, hidden, recommended, now]);
+      db.run(`
+        UPDATE products SET
+          sale_price = CASE WHEN ? > 0 THEN ? ELSE sale_price END,
+          promo_discount_percent = CASE WHEN ? > 0 THEN ? ELSE promo_discount_percent END,
+          hidden = CASE WHEN ? <> 0 THEN ? ELSE hidden END,
+          customer_recommended = CASE WHEN ? <> 0 THEN ? ELSE customer_recommended END
+        WHERE sku = ?
+      `, [salePrice, salePrice, promoDiscount, promoDiscount, hidden, hidden, recommended, recommended, sku]);
+    });
+    db.run("COMMIT");
+    return Buffer.from(db.export());
+  } catch (error) {
+    try {
+      db.run("ROLLBACK");
+    } catch {}
+    console.warn("product settings overlay failed", error.message || error);
+    return body;
+  } finally {
+    db.close();
+  }
 }
 
 function updateDatabaseBufferCache(body) {
