@@ -80,7 +80,8 @@ async function init() {
   });
   document.querySelectorAll("[data-sort]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.sort = button.dataset.sort || "pick";
+      const nextSort = button.dataset.sort || "pick";
+      state.sort = state.sort === nextSort ? "pick" : nextSort;
       loadProducts();
     });
   });
