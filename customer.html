@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260618h" />
-    <script defer src="./customer.js?v=20260618h"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260619pick" />
+    <script defer src="./customer.js?v=20260619pick"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -62,9 +62,9 @@
 
       <section id="app-view" class="app-view" hidden>
         <header class="customer-header">
-          <div>
+          <div class="customer-brand">
             <img src="./management/wa-logo.png" alt="" class="header-logo" />
-            <div>
+            <div class="customer-heading">
               <h1>מסך הזמנה</h1>
               <p id="customer-name">לקוח</p>
             </div>
@@ -80,6 +80,16 @@
           </aside>
 
           <section class="catalog-panel">
+            <div class="catalog-title">
+              <h2 id="section-title">המומלצים שלי</h2>
+              <p id="section-subtitle" hidden></p>
+            </div>
+            <div class="sort-buttons" role="group" aria-label="מיון מוצרים">
+              <button class="sort-button active" type="button" data-sort="pick">סדר ליקוט</button>
+              <button class="sort-button" type="button" data-sort="customer">הנמכרים שלי</button>
+              <button class="sort-button" type="button" data-sort="supplier">לפי ספק</button>
+              <button class="sort-button" type="button" data-sort="name">א-ב</button>
+            </div>
             <div class="toolbar">
               <label class="search-box">
                 חיפוש מוצר
@@ -93,18 +103,6 @@
                 קטגוריה
                 <select id="category-filter"></select>
               </label>
-              <label>
-                מיון
-                <select id="sort-filter">
-                  <option value="customer">הנמכרים ביותר שלי</option>
-                  <option value="supplier">לפי ספק</option>
-                  <option value="name">לפי א-ב</option>
-                </select>
-              </label>
-            </div>
-            <div class="catalog-title">
-              <h2 id="section-title">המומלצים שלי</h2>
-              <p id="section-subtitle" hidden></p>
             </div>
             <div id="product-grid" class="product-grid" aria-live="polite"></div>
           </section>
@@ -134,6 +132,7 @@
           <span>סיכום הזמנה</span>
           <strong id="cart-fab-count">0</strong>
         </button>
+        <button id="top-fab" class="top-fab" type="button" hidden aria-label="חזרה לראש העמוד">↑</button>
         <div id="cart-backdrop" class="cart-backdrop" hidden></div>
       </section>
 

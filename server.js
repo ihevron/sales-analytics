@@ -1982,7 +1982,7 @@ async function handleCustomerProducts(req, res) {
   const supplier = String(url.searchParams.get("supplier") || "").trim();
   const category = String(url.searchParams.get("category") || "").trim();
   const section = String(url.searchParams.get("section") || "recommended").trim();
-  const sort = String(url.searchParams.get("sort") || "customer").trim();
+  const sort = String(url.searchParams.get("sort") || "pick").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 500);
   const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
@@ -1999,6 +1999,7 @@ async function handleCustomerProducts(req, res) {
       columns.has("weight") ? "p.weight" : "0 AS weight",
       columns.has("barcode") ? "p.barcode" : "'' AS barcode",
       columns.has("image_url") ? "p.image_url" : "'' AS image_url",
+      columns.has("pick_order") ? "p.pick_order" : "999999 AS pick_order",
       columns.has("hidden") ? "p.hidden" : "0 AS hidden",
       columns.has("customer_recommended") ? "p.customer_recommended" : "0 AS customer_recommended",
       "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
@@ -2028,28 +2029,62 @@ async function handleCustomerProducts(req, res) {
       .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
       .map((row, index) => [String(row.sku || ""), index + 1]));
     const hasRecommendedProducts = visibleProducts.some((candidate) => numberValue(candidate.customer_quantity) > 0 || numberValue(candidate.customer_recommended) > 0);
+    const normalizedPickOrder = (row) => {
+      const value = numberValue(row.pick_order);
+      return value > 0 ? value : 999999;
+    };
+    const compareByPickOrder = (a, b) =>
+      normalizedPickOrder(a) - normalizedPickOrder(b)
+      || String(a.supplier || "").localeCompare(String(b.supplier || ""), "he")
+      || String(a.description || "").localeCompare(String(b.description || ""), "he");
     const compareByCustomerSales = (a, b) =>
       numberValue(b.customer_quantity) - numberValue(a.customer_quantity)
       || numberValue(b.global_quantity) - numberValue(a.global_quantity)
-      || String(a.description || "").localeCompare(String(b.description || ""), "he");
+      || compareByPickOrder(a, b);
     const compareBySupplier = (a, b) =>
       String(a.supplier || "").localeCompare(String(b.supplier || ""), "he")
-      || compareByCustomerSales(a, b);
+      || compareByPickOrder(a, b);
     const compareByName = (a, b) => String(a.description || "").localeCompare(String(b.description || ""), "he");
     const sortProducts = (rows) => {
-      const compare = sort === "supplier" ? compareBySupplier : (sort === "name" ? compareByName : compareByCustomerSales);
+      const compare = sort === "supplier"
+        ? compareBySupplier
+        : (sort === "name" ? compareByName : (sort === "customer" ? compareByCustomerSales : compareByPickOrder));
       return rows.slice().sort(compare);
     };
-    const filtered = sortProducts(visibleProducts
+    const baseRows = visibleProducts
       .filter((row) => {
         if (!query) return true;
         return [row.sku, row.description, row.category, row.supplier, row.barcode]
           .some((value) => String(value || "").toLowerCase().includes(query));
       })
       .filter((row) => !supplier || String(row.supplier || "") === supplier)
-      .filter((row) => !category || String(row.category || "") === category)
-      .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0 || !hasRecommendedProducts)
-      .filter((row) => section !== "deals" || productPromoPrice(row) > 0))
+      .filter((row) => !category || String(row.category || "") === category);
+    let sourceRows = baseRows;
+    if (section === "recommended") {
+      const manuallyRecommended = baseRows
+        .filter((row) => numberValue(row.customer_recommended) > 0)
+        .sort(compareByPickOrder);
+      const manualSkus = new Set(manuallyRecommended.map((row) => String(row.sku || "")));
+      const customerTop = baseRows
+        .filter((row) => numberValue(row.customer_quantity) > 0 && !manualSkus.has(String(row.sku || "")))
+        .sort(compareByCustomerSales)
+        .slice(0, 30)
+        .sort(compareByPickOrder);
+      const fallbackTop = hasRecommendedProducts || customerTop.length
+        ? []
+        : baseRows
+          .filter((row) => !manualSkus.has(String(row.sku || "")))
+          .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || compareByPickOrder(a, b))
+          .slice(0, 30)
+          .sort(compareByPickOrder);
+      sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
+      if (sort !== "pick") sourceRows = sortProducts(sourceRows);
+    } else if (section === "deals") {
+      sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
+    } else {
+      sourceRows = sortProducts(baseRows);
+    }
+    const filtered = sourceRows
       .slice(0, limit)
       .map((row) => {
         const listPrice = productListPrice(row);
@@ -2066,6 +2101,7 @@ async function handleCustomerProducts(req, res) {
           promo_discount_percent: numberValue(row.promo_discount_percent),
           standard_cost: numberValue(row.standard_cost),
           weight: numberValue(row.weight),
+          pick_order: normalizedPickOrder(row),
           image_url: String(row.image_url || ""),
           customer_recommended: numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0,
           popularity_label: numberValue(row.global_quantity) <= 0

@@ -45,7 +45,7 @@ const state = {
   search: "",
   supplier: "",
   category: "",
-  sort: "customer",
+  sort: "pick",
   section: "recommended",
   hasCustomerHistory: false,
   quantitySku: "",
@@ -78,12 +78,16 @@ async function init() {
     state.section = state.category ? "all" : state.section;
     loadProducts();
   });
-  document.getElementById("sort-filter").addEventListener("change", (event) => {
-    state.sort = event.target.value || "customer";
-    loadProducts();
+  document.querySelectorAll("[data-sort]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.sort = button.dataset.sort || "pick";
+      loadProducts();
+    });
   });
   document.getElementById("submit-order").addEventListener("click", submitOrder);
   document.getElementById("cart-fab").addEventListener("click", openCart);
+  document.getElementById("top-fab").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  window.addEventListener("scroll", updateTopButton, { passive: true });
   document.getElementById("close-cart").addEventListener("click", closeCart);
   document.getElementById("cart-backdrop").addEventListener("click", closeCart);
   document.getElementById("show-register-terms").addEventListener("click", () => showTermsModal("register"));
@@ -112,6 +116,9 @@ async function init() {
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       state.section = button.dataset.section;
+      if (state.section === "all" || state.section === "deals" || state.section === "recommended") {
+        state.sort = "pick";
+      }
       loadProducts();
     });
   });
@@ -393,12 +400,21 @@ function updateNavigation() {
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === state.section);
   });
+  document.querySelectorAll("[data-sort]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.sort === state.sort);
+  });
   const text = SECTION_TEXT[state.section] || SECTION_TEXT.all;
   const subtitle = state.category ? "" : text.subtitle;
   document.getElementById("section-title").textContent = state.category || text.title;
   const subtitleElement = document.getElementById("section-subtitle");
   subtitleElement.textContent = subtitle;
   subtitleElement.hidden = !subtitle;
+}
+
+function updateTopButton() {
+  const button = document.getElementById("top-fab");
+  if (!button) return;
+  button.hidden = window.scrollY < 520;
 }
 
 function renderProducts() {
