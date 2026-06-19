@@ -697,6 +697,20 @@ async function handlePostgresProductSettings(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres", updated: results.filter((item) => item.ok).length, results });
 }
 
+async function handlePostgresProductSettingsList(res) {
+  if (!requirePostgres(res)) return;
+  try {
+    const rows = await postgresRows("product_customer_settings?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden,updated_at&order=sku.asc&limit=10000");
+    sendJson(res, 200, { ok: true, source: "postgres", rows });
+  } catch (error) {
+    if (/product_customer_settings|schema cache|relation|does not exist|PGRST/i.test(error.message || "")) {
+      sendJson(res, 200, { ok: true, source: "postgres", rows: [], missingSchema: true });
+      return;
+    }
+    throw error;
+  }
+}
+
 async function existingPostgresProductSettings(skus) {
   const settings = new Map();
   const isMissingSettingsTable = (error) => /product_customer_settings|schema cache|relation|does not exist|PGRST/i.test(error.message || "");
@@ -2257,6 +2271,14 @@ const server = http.createServer((req, res) => {
     handlePostgresProductFilters(res).catch((error) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres product filters failed" });
+    });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/product-settings" && req.method === "GET") {
+    handlePostgresProductSettingsList(res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres product settings failed" });
     });
     return;
   }

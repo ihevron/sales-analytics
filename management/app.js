@@ -970,6 +970,7 @@ async function importCustomerAppProductsFile(event) {
   const status = document.getElementById("customer-app-product-import-status");
   try {
     status.textContent = "קורא קובץ מוצרים...";
+    await syncProductCustomerSettingsFromPostgres();
     const sheets = await readWorkbookAllSheets(file);
     const rows = fixedProductRows(sheets[0]?.rows || []);
     const importedProducts = importProductRows(rows);
@@ -987,6 +988,28 @@ async function importCustomerAppProductsFile(event) {
     alert(`שגיאה בייבוא מוצרים:\n${error.message || "יש לבדוק את מבנה הקובץ."}`);
   } finally {
     event.target.value = "";
+  }
+}
+
+async function syncProductCustomerSettingsFromPostgres() {
+  try {
+    const response = await fetch("/api/postgres/product-settings");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false || !Array.isArray(data.rows)) return { ok: false };
+    data.rows.forEach((row) => {
+      const sku = text(row.sku);
+      if (!sku) return;
+      saveProductCustomerSetting(sku, {
+        sale_price: number(row.sale_price),
+        promo_discount_percent: number(row.promo_discount_percent),
+        hidden: number(row.hidden) ? 1 : 0,
+        customer_recommended: number(row.customer_recommended) ? 1 : 0,
+      });
+    });
+    return { ok: true, rows: data.rows.length };
+  } catch (error) {
+    console.warn("Postgres product settings sync unavailable", error);
+    return { ok: false, error: error.message };
   }
 }
 
