@@ -691,6 +691,21 @@ async function handlePostgresCallProfilesImport(payload, res) {
 
   if (rows.length) {
     const customerNos = rows.map((row) => row.customer_no).filter(Boolean);
+    const existingByCustomer = new Map();
+    for (let index = 0; index < customerNos.length; index += 150) {
+      const chunk = customerNos.slice(index, index + 150).map((customerNo) => `"${String(customerNo).replaceAll('"', '\\"')}"`).join(",");
+      try {
+        const existingRows = await postgresRows(`customer_call_profiles?select=customer_no,terms_accepted_at,customer_type&customer_no=in.(${chunk})&limit=1000`);
+        existingRows.forEach((row) => existingByCustomer.set(String(row.customer_no), row));
+      } catch (error) {
+        if (!/terms_accepted_at|customer_type|schema cache|column/i.test(error.message || "")) throw error;
+      }
+    }
+    rows.forEach((row) => {
+      const existing = existingByCustomer.get(String(row.customer_no)) || {};
+      if (!row.terms_accepted_at && existing.terms_accepted_at) row.terms_accepted_at = existing.terms_accepted_at;
+      if ((row.customer_type === "existing" || !row.customer_type) && existing.customer_type) row.customer_type = existing.customer_type;
+    });
     for (let index = 0; index < customerNos.length; index += 150) {
       const chunk = customerNos.slice(index, index + 150).map((customerNo) => `"${String(customerNo).replaceAll('"', '\\"')}"`).join(",");
       await postgresRest(`customer_call_profiles?customer_no=in.(${chunk})`, {
@@ -1430,6 +1445,12 @@ function normalizeCustomerProfile(profile) {
   };
 }
 
+function shouldRequireTermsAcceptance(profile) {
+  const acceptedAt = Date.parse(profile?.terms_accepted_at || "");
+  if (!acceptedAt) return true;
+  return Date.now() - acceptedAt > 1000 * 60 * 60 * 24 * 30;
+}
+
 async function handleCustomerLogin(payload, res) {
   const customerNo = String(payload?.customerNo || payload?.customer_no || "").trim();
   const companyId = String(payload?.companyId || payload?.company_id || "").trim();
@@ -1447,7 +1468,7 @@ async function handleCustomerLogin(payload, res) {
   sendJson(res, 200, {
     ok: true,
     token: createCustomerToken(profile.customer_no),
-    requires_terms: !profile.terms_accepted_at,
+    requires_terms: shouldRequireTermsAcceptance(profile),
     customer: normalizeCustomerProfile(profile),
   });
 }
@@ -1586,7 +1607,7 @@ function productListPrice(row) {
 function productPromoPrice(row) {
   const listPrice = productListPrice(row);
   const explicitSalePrice = numberValue(row.sale_price);
-  if (explicitSalePrice > 0 && (!listPrice || explicitSalePrice < listPrice)) return explicitSalePrice;
+  if (explicitSalePrice > 0) return explicitSalePrice;
 
   const discountPercent = numberValue(row.promo_discount_percent);
   if (discountPercent > 0 && listPrice > 0) {
@@ -1597,6 +1618,13 @@ function productPromoPrice(row) {
 
 function productPrice(row) {
   return productPromoPrice(row) || productListPrice(row);
+}
+
+function productPromoNote(row) {
+  const explicitSalePrice = numberValue(row.sale_price);
+  if (explicitSalePrice > 0) return `מבצע: מחיר ${explicitSalePrice.toFixed(2)}`;
+  const discountPercent = numberValue(row.promo_discount_percent);
+  return discountPercent > 0 ? `מבצע: ${discountPercent}% הנחה` : "";
 }
 
 async function handleCustomerProducts(req, res) {
@@ -1610,7 +1638,7 @@ async function handleCustomerProducts(req, res) {
     sendJson(res, 404, { ok: false, error: "customer not found" });
     return;
   }
-  if (!profile.terms_accepted_at) {
+  if (shouldRequireTermsAcceptance(profile)) {
     sendJson(res, 403, { ok: false, error: "terms_required" });
     return;
   }
@@ -1733,7 +1761,7 @@ async function handleCustomerOrder(payload, req, res) {
     sendJson(res, 404, { ok: false, error: "customer not found" });
     return;
   }
-  if (!profile.terms_accepted_at) {
+  if (shouldRequireTermsAcceptance(profile)) {
     sendJson(res, 403, { ok: false, error: "terms_required" });
     return;
   }
@@ -1758,12 +1786,13 @@ async function handleCustomerOrder(payload, req, res) {
     const product = bySku.get(sku) || { sku, description: sku };
     const price = productPrice(product);
     const unitCost = numberValue(product.standard_cost);
+    const notes = [itemNotes.get(sku), productPromoNote(product)].filter(Boolean).join(" | ");
     return {
       sku,
       product_desc: String(product.description || sku),
       quantity,
       picked_quantity: 0,
-      note: itemNotes.get(sku) || "",
+      note: notes,
       item_status: "pending",
       entry_sequence: index + 1,
       is_carton: 0,

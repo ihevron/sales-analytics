@@ -96,6 +96,11 @@
         </section>
 
         <section id="customer-search" class="screen">
+          <div class="report-tabs">
+            <button class="small-action active" type="button" data-screen="customer-search">ניתוח לקוחות</button>
+            <button class="small-action" type="button" data-screen="products">מוצרים</button>
+            <button class="small-action" type="button" data-screen="reports">חזרות</button>
+          </div>
           <div class="panel">
             <div class="toolbar customer-analysis-toolbar">
               <div class="segmented" data-period-target="customers" role="group" aria-label="בחירת תקופה לניתוח לקוחות">
@@ -321,6 +326,11 @@
         </section>
 
         <section id="products" class="screen">
+          <div class="report-tabs">
+            <button class="small-action" type="button" data-screen="customer-search">ניתוח לקוחות</button>
+            <button class="small-action active" type="button" data-screen="products">מוצרים</button>
+            <button class="small-action" type="button" data-screen="reports">חזרות</button>
+          </div>
           <div class="panel">
             <div class="panel-header">
               <div>
@@ -349,9 +359,9 @@
           <div class="report-tabs">
             <button class="small-action" type="button" data-screen="customer-search">ניתוח לקוחות</button>
             <button class="small-action" type="button" data-screen="products">מוצרים</button>
-            <button class="small-action active" type="button" data-screen="reports">בדיקת חשבונית</button>
+            <button class="small-action active" type="button" data-screen="reports">חזרות</button>
           </div>
-          <div class="panel">
+          <div class="panel hidden" aria-hidden="true">
             <div class="panel-header">
               <div>
                 <h2>בדיקת חשבונית ספק</h2>
@@ -378,18 +388,20 @@
           <div class="panel">
             <div class="panel-header">
               <div>
-                <h2>חזרות לפי ספק</h2>
-                <p>דוח ראשון: כמה יחידות חזרו מכל מוצר לפי ספק ותקופה</p>
+                <h2>ניתוח חזרות</h2>
+                <p>ניתוח יחידות חזרה לפי מוצר, ספק, לקוח ותקופה</p>
               </div>
             </div>
             <div class="toolbar report-toolbar">
               <select id="returns-report-period">
-                <option value="1">חודש אחרון</option>
+                <option value="last">חודש אחרון</option>
+                <option value="prev">חודש קודם</option>
                 <option value="3">3 חודשים</option>
                 <option value="6">6 חודשים</option>
                 <option value="12">12 חודשים</option>
               </select>
               <select id="returns-report-supplier"><option value="">כל הספקים</option></select>
+              <select id="returns-report-customer"><option value="">כל הלקוחות</option></select>
               <button class="primary-action" id="returns-report-run" type="button">הצג דוח</button>
             </div>
             <div class="table-wrap"><table id="returns-supplier-table"></table></div>
@@ -549,7 +561,7 @@
       <nav class="bottom-nav" aria-label="ניווט מהיר במובייל">
         <button class="nav-item active" data-screen="dashboard"><span>🏠</span><small>בית</small></button>
         <button class="nav-item" data-screen="calls"><span>📞</span><small>שיחות</small></button>
-        <button class="nav-item" data-screen="order-create"><span>📦</span><small>הזמנות</small></button>
+        <button class="nav-item" data-screen="order-create"><span>📦</span><small>הזמנה</small></button>
         <button class="nav-item" data-screen="picking"><span>👷🏻‍♂️</span><small>ליקוט</small></button>
         <button class="nav-item" data-screen="reports"><span>📊</span><small>דוחות</small></button>
         <button class="nav-item" data-screen="order-history"><span>🚚</span><small>בתהליך</small></button>

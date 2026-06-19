@@ -433,7 +433,7 @@ function renderPrice(product) {
   const listPrice = Number(product.list_price) || 0;
   const promoPrice = Number(product.promo_price) || 0;
   const discount = Number(product.promo_discount_percent) || 0;
-  const hasPromo = promoPrice > 0 && listPrice > promoPrice;
+  const hasPromo = promoPrice > 0;
   if (!hasPromo) return `<div class="product-price">${money(price)}</div>`;
   const label = discount > 0 ? `-${integer(discount)}%` : "מבצע";
   return `

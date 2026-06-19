@@ -279,6 +279,10 @@ button { cursor: pointer; }
   accent-color: var(--primary);
 }
 
+.customer-app-row-selected td {
+  background: #eef6ff;
+}
+
 .visibility-pill,
 .recommendation-pill {
   display: inline-flex;
@@ -1678,6 +1682,25 @@ ul {
     width: 58px;
     min-width: 58px;
   }
+
+  .call-contact-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .call-icon-action {
+    justify-content: center;
+  }
+
+  .call-icon-action.order {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .call-icon-action.phone { order: 2; }
+  .call-icon-action.whatsapp { order: 3; }
+  .call-icon-action.waze { order: 4; }
   .pick-product-button {
     font-size: 15px;
     line-height: 1.12;

@@ -187,8 +187,25 @@ function loadCallTemplates() {
   }
 }
 
-function saveCallTemplates() {
+function loadCallTemplatesFromDb() {
+  try {
+    const row = firstRow("SELECT value FROM app_metadata WHERE key = ?", ["call_message_templates"]);
+    const saved = JSON.parse(row.value || "null");
+    return Array.isArray(saved) && saved.length ? saved : loadCallTemplates();
+  } catch {
+    return loadCallTemplates();
+  }
+}
+
+async function saveCallTemplates() {
   localStorage.setItem("callMessageTemplatesV1", JSON.stringify(state.callTemplates));
+  if (!state.db) return;
+  state.db.run(`
+    INSERT INTO app_metadata (key, value)
+    VALUES ('call_message_templates', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `, [JSON.stringify(state.callTemplates)]);
+  await persistDatabase();
 }
 
 document.addEventListener("DOMContentLoaded", init);
@@ -197,6 +214,7 @@ async function init() {
   setStatus("טוען בסיס נתונים");
   await initDatabase();
   if (!state.db) return;
+  state.callTemplates = loadCallTemplatesFromDb();
   bindEvents();
   await refreshAll();
   await runScheduledCallReset({ refresh: true });
@@ -501,6 +519,7 @@ function bindEvents() {
   document.getElementById("clear-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(true));
   document.getElementById("reset-customer-app-promos").addEventListener("click", resetCustomerAppPromotions);
   document.getElementById("customer-app-promo-product-query").addEventListener("input", handleCustomerAppPromoProductInput);
+  document.getElementById("customer-app-promo-product-query").addEventListener("focus", (event) => event.target.select());
   document.getElementById("load-customer-app-customer").addEventListener("click", loadCustomerAppCustomer);
   document.getElementById("save-customer-app-customer").addEventListener("click", saveCustomerAppCustomer);
   document.getElementById("customer-app-customer-query").addEventListener("input", debounce(renderCustomerAppCustomers, 200));
@@ -553,7 +572,7 @@ function bindEvents() {
   document.getElementById("invoice-manual-discount").addEventListener("input", renderManualInvoiceComparison);
   document.getElementById("invoice-manual-price").addEventListener("input", renderManualInvoiceComparison);
   document.getElementById("returns-report-run").addEventListener("click", renderSupplierReturnsReport);
-  ["returns-report-period", "returns-report-supplier"].forEach((id) => document.getElementById(id).addEventListener("change", renderSupplierReturnsReport));
+  ["returns-report-period", "returns-report-supplier", "returns-report-customer"].forEach((id) => document.getElementById(id)?.addEventListener("change", renderSupplierReturnsReport));
   document.getElementById("recommendation-form").addEventListener("submit", saveRecommendation);
   document.getElementById("recommendation-reset").addEventListener("click", resetRecommendationForm);
   document.getElementById("order-customer-query").addEventListener("input", debounce(renderOrderCustomerResults, 150));
@@ -656,8 +675,9 @@ function showScreen(id) {
   document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
   document.querySelectorAll(".report-tabs [data-screen]").forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.toggle("active-screen", screen.id === id));
-  document.getElementById("screen-title").textContent = screens[id].title;
-  document.getElementById("screen-subtitle").textContent = screens[id].subtitle;
+  const reportSubscreen = ["customer-search", "products", "reports"].includes(id);
+  document.getElementById("screen-title").textContent = reportSubscreen ? screens.reports.title : screens[id].title;
+  document.getElementById("screen-subtitle").textContent = reportSubscreen ? screens[id].title : screens[id].subtitle;
   const icon = document.getElementById("screen-icon");
   if (icon) icon.textContent = screenIcons[id] || "📊";
   document.querySelector(".sidebar").classList.remove("open");
@@ -1620,14 +1640,25 @@ function refreshReportFilters() {
     ORDER BY value
   `);
   fillSelect("returns-report-supplier", "כל הספקים", suppliers);
+  const customers = queryRows(`
+    SELECT DISTINCT customer_no AS value,
+      COALESCE(NULLIF(MAX(customer_name), ''), customer_no) AS label
+    FROM sales_raw
+    WHERE COALESCE(customer_no, '') <> ''
+    GROUP BY customer_no
+    ORDER BY label
+  `);
+  fillSelect("returns-report-customer", "כל הלקוחות", customers, "value", "label");
 }
 
 function renderSupplierReturnsReport() {
-  const months = number(document.getElementById("returns-report-period").value) || 1;
+  const period = document.getElementById("returns-report-period").value || "last";
   const supplier = document.getElementById("returns-report-supplier").value;
-  const range = dateRange(months);
+  const customer = document.getElementById("returns-report-customer")?.value || "";
+  const range = returnsReportDateRange(period);
   const rows = queryRows(`
     SELECT
+      COALESCE(MAX(NULLIF(s.customer_name, '')), s.customer_no, '') AS customer,
       s.sku,
       COALESCE(MAX(NULLIF(s.product_desc, '')), MAX(p.description), s.sku) AS product,
       COALESCE(NULLIF(s.supplier, ''), p.supplier, '') AS supplier,
@@ -1638,12 +1669,14 @@ function renderSupplierReturnsReport() {
     LEFT JOIN products p ON p.sku = s.sku
     WHERE s.sale_date >= ? AND s.sale_date < ?
       AND (? = '' OR COALESCE(NULLIF(s.supplier, ''), p.supplier, '') = ?)
-    GROUP BY s.sku, COALESCE(NULLIF(s.supplier, ''), p.supplier, '')
+      AND (? = '' OR s.customer_no = ?)
+    GROUP BY s.sku, s.customer_no, COALESCE(NULLIF(s.supplier, ''), p.supplier, '')
     HAVING ABS(COALESCE(SUM(s.return_units), 0)) > 0
     ORDER BY return_units DESC
     LIMIT 500
-  `, [range.start, range.end, supplier, supplier]);
+  `, [range.start, range.end, supplier, supplier, customer, customer]);
   renderTable("returns-supplier-table", rows, [
+    { key: "customer", label: "לקוח" },
     { key: "supplier", label: "ספק" },
     { key: "sku", label: 'מק"ט' },
     { key: "product", label: "מוצר" },
@@ -1651,6 +1684,23 @@ function renderSupplierReturnsReport() {
     { key: "purchase_units", label: "יחידות קניה", format: numberDisplay },
     { key: "returns_percent", label: "% חזרות", render: returnPercentCell },
   ], "returnsSupplier", "return_units", "desc");
+}
+
+function returnsReportDateRange(period) {
+  const endOfLastFullMonth = firstDayOfCurrentMonth();
+  if (period === "last") {
+    return {
+      start: toSqlDate(new Date(endOfLastFullMonth.getFullYear(), endOfLastFullMonth.getMonth() - 1, 1)),
+      end: toSqlDate(endOfLastFullMonth),
+    };
+  }
+  if (period === "prev") {
+    return {
+      start: toSqlDate(new Date(endOfLastFullMonth.getFullYear(), endOfLastFullMonth.getMonth() - 2, 1)),
+      end: toSqlDate(new Date(endOfLastFullMonth.getFullYear(), endOfLastFullMonth.getMonth() - 1, 1)),
+    };
+  }
+  return dateRange(number(period) || 1);
 }
 
 function renderInvoiceProductResults() {
@@ -2868,7 +2918,7 @@ function renderPickingByProduct() {
     <div class="order-pick-note">סך הכל לקוחות: ${integer(rows.length)} · סך הכל יחידות: ${numberDisplay(totalUnits)}</div>
     <div class="table-wrap">
       <table class="compact-table product-picking-table">
-        <thead><tr>${showProductColumn ? "<th>מוצר</th>" : ""}<th>שם לקוח</th><th>כמות</th><th>פעולות</th></tr></thead>
+        <thead><tr>${showProductColumn ? "<th>מוצר</th>" : ""}<th>שם לקוח</th><th></th><th>כמות</th><th></th></tr></thead>
         <tbody>
           ${rows.length ? rows.map((row) => `
             <tr class="${pickingCategoryClass(row.category)}">
@@ -2880,15 +2930,17 @@ function renderPickingByProduct() {
                 ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
               </td>
               <td>
+                <button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button>
+              </td>
+              <td>
                 <input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" />
                 ${row.is_carton ? `<small class="pick-note">${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
               </td>
               <td>
-                <button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button>
                 <button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button>
               </td>
             </tr>
-          `).join("") : `<tr><td colspan="${showProductColumn ? 4 : 3}" class="empty-state">אין פריטים פתוחים לבחירה הזו</td></tr>`}
+          `).join("") : `<tr><td colspan="${showProductColumn ? 5 : 4}" class="empty-state">אין פריטים פתוחים לבחירה הזו</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2918,6 +2970,7 @@ function pickingOrderItemsHtml(orderId) {
   const totalUnits = pickableRows.reduce((sum, row) => sum + orderLineUnits(row), 0);
   const pendingRows = pending.length ? pending.map((row) => `
     <tr class="${pickingCategoryClass(row.category)}">
+      <td><button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button></td>
       <td><input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
       <td>
         <button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
@@ -2925,12 +2978,9 @@ function pickingOrderItemsHtml(orderId) {
         ${row.substitute_product_id ? `<small class="pick-note">חלופי נבחר: ${escapeHtml(row.substitute_product_id)}</small>` : ""}
         ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
       </td>
-      <td>
-        <button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button>
-        <button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button>
-      </td>
+      <td><button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button></td>
     </tr>
-  `).join("") : `<tr><td colspan="3" class="empty-state">אין מוצרים ממתינים לליקוט</td></tr>`;
+  `).join("") : `<tr><td colspan="4" class="empty-state">אין מוצרים ממתינים לליקוט</td></tr>`;
   const orderNotes = pending[0]?.order_notes || firstRow("SELECT notes FROM customer_orders WHERE id = ?", [orderId]).notes || "";
   const pickedRows = done.length ? done.map((row) => `
     <li class="picked-list-item" draggable="true" data-picked-item="${row.id}">
@@ -2952,7 +3002,7 @@ function pickingOrderItemsHtml(orderId) {
       <div class="order-pick-note">סך הכל שורות: ${integer(totalLines)} · סך הכל יחידות: ${numberDisplay(totalUnits)}</div>
       <div class="table-wrap">
         <table class="compact-table">
-          <thead><tr><th>כמות</th><th>מוצר</th><th>פעולות</th></tr></thead>
+          <thead><tr><th></th><th>כמות</th><th>מוצר</th><th></th></tr></thead>
           <tbody>${pendingRows}</tbody>
         </table>
       </div>
@@ -4563,7 +4613,7 @@ function loadSelectedCallTemplate(templateId) {
   document.getElementById("call-template-text").value = template.text || "";
 }
 
-function saveCurrentCallTemplate() {
+async function saveCurrentCallTemplate() {
   const title = text(document.getElementById("call-template-title").value);
   const templateTextValue = text(document.getElementById("call-template-text").value);
   if (!title || !templateTextValue) return alert("יש למלא שם נוסח וטקסט הודעה.");
@@ -4576,7 +4626,7 @@ function saveCurrentCallTemplate() {
     state.callTemplates.push({ id, title, text: templateTextValue });
     state.selectedCallTemplateId = id;
   }
-  saveCallTemplates();
+  await saveCallTemplates();
   renderCalls();
 }
 
@@ -4588,12 +4638,12 @@ function startNewCallTemplate() {
   document.getElementById("call-template-title").focus();
 }
 
-function deleteCurrentCallTemplate() {
+async function deleteCurrentCallTemplate() {
   if (state.callTemplates.length <= 1) return alert("צריך להשאיר לפחות נוסח אחד.");
   if (!confirm("למחוק את הנוסח?")) return;
   state.callTemplates = state.callTemplates.filter((item) => item.id !== state.selectedCallTemplateId);
   state.selectedCallTemplateId = state.callTemplates[0]?.id || "";
-  saveCallTemplates();
+  await saveCallTemplates();
   renderCalls();
 }
 
@@ -4647,6 +4697,7 @@ function callDetailHtml(row) {
       </div>
       <div class="call-detail-actions">
         <button data-call-status="ordered" data-call-customer="${escapeAttr(row.customer_no)}">V הזמין</button>
+        <button data-call-status="pending" data-call-customer="${escapeAttr(row.customer_no)}">בטיפול</button>
         <button data-call-status="no_need" data-call-customer="${escapeAttr(row.customer_no)}">לא צריך</button>
         <button data-call-status="no_answer" data-call-customer="${escapeAttr(row.customer_no)}">לא ענה</button>
         <button data-call-status="call_again" data-call-customer="${escapeAttr(row.customer_no)}">לחזור</button>
@@ -4667,12 +4718,6 @@ function callDetailHtml(row) {
         </label>
         <textarea id="call-message-${escapeAttr(row.customer_no)}" data-call-message="${escapeAttr(row.customer_no)}" rows="2">${escapeHtml(messagePreview)}</textarea>
         ${whatsappPhone ? `<a class="primary-action" id="call-whatsapp-${escapeAttr(row.customer_no)}" data-call-whatsapp-send="${escapeAttr(row.customer_no)}" href="${whatsappUrl(whatsappPhone, messagePreview)}" target="_blank" rel="noopener">שליחת WhatsApp</a>` : ""}
-      </div>
-      <div class="call-profile-editor">
-        <label>טלפון<input id="call-edit-phone-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.phone || "")}" /></label>
-        <label>כתובת<input id="call-edit-address-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.address || "")}" /></label>
-        <label>ימי שיחה<input id="call-edit-days-${escapeAttr(row.customer_no)}" value="${escapeAttr(row.days || "")}" placeholder="ראשון,שלישי" /></label>
-        <button class="secondary-action" data-save-call-profile="${escapeAttr(row.customer_no)}" type="button">שמירת לקוח</button>
       </div>
       <label class="call-note-editor">הערת שיחה
         <textarea id="call-note-${escapeAttr(row.customer_no)}" rows="3">${escapeHtml(row.notes || "")}</textarea>
@@ -5108,6 +5153,11 @@ async function saveCustomerAppPromo(clearPromo = false) {
   document.getElementById("customer-app-promo-sku").value = sku;
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
+  const queryInput = document.getElementById("customer-app-promo-product-query");
+  if (queryInput) {
+    queryInput.focus();
+    queryInput.select();
+  }
   if (document.getElementById("products")?.classList.contains("active-screen")) await renderProducts();
 }
 
@@ -5335,10 +5385,19 @@ function renderCustomerAppProducts() {
       <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">הגדרת מבצע</button>
     ` },
   ], "customer-app-products", "description", "asc");
+  const markSelectedRows = () => {
+    document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]").forEach((checkbox) => {
+      checkbox.closest("tr")?.classList.toggle("customer-app-row-selected", checkbox.checked);
+    });
+  };
   document.getElementById("customer-app-select-all-products")?.addEventListener("change", (event) => {
     document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]").forEach((checkbox) => {
       checkbox.checked = event.target.checked;
     });
+    markSelectedRows();
+  });
+  document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]").forEach((checkbox) => {
+    checkbox.addEventListener("change", markSelectedRows);
   });
   document.querySelectorAll("#customer-app-products-table [data-toggle-customer-app-hidden]").forEach((button) => {
     button.addEventListener("click", () => toggleCustomerAppProductHidden(button.dataset.toggleCustomerAppHidden));
