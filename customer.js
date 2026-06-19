@@ -45,6 +45,7 @@ const state = {
   search: "",
   supplier: "",
   category: "",
+  sort: "customer",
   section: "recommended",
   hasCustomerHistory: false,
   quantitySku: "",
@@ -75,6 +76,10 @@ async function init() {
   document.getElementById("category-filter").addEventListener("change", (event) => {
     state.category = event.target.value;
     state.section = state.category ? "all" : state.section;
+    loadProducts();
+  });
+  document.getElementById("sort-filter").addEventListener("change", (event) => {
+    state.sort = event.target.value || "customer";
     loadProducts();
   });
   document.getElementById("submit-order").addEventListener("click", submitOrder);
@@ -347,7 +352,7 @@ async function loadProducts() {
   const grid = document.getElementById("product-grid");
   grid.innerHTML = `<div class="empty-state">טוען מוצרים...</div>`;
   try {
-    const params = new URLSearchParams({ limit: "300", section: state.section });
+    const params = new URLSearchParams({ limit: "300", section: state.section, sort: state.sort });
     if (state.search) params.set("q", state.search);
     if (state.supplier) params.set("supplier", state.supplier);
     if (state.category) params.set("category", state.category);

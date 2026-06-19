@@ -586,6 +586,15 @@ async function handlePostgresProductsImport(payload, res) {
     .map((row) => [row.sku, row])).values()];
 
   if (rows.length) {
+    const existingSettings = await existingPostgresProductSettings(rows.map((row) => row.sku));
+    rows.forEach((row) => {
+      const saved = existingSettings.get(String(row.sku || "")) || {};
+      row.sale_price = numberValue(saved.promo_price) > 0 ? numberValue(saved.promo_price) : row.sale_price;
+      row.promo_price = numberValue(saved.promo_price) > 0 ? numberValue(saved.promo_price) : row.promo_price;
+      row.promo_discount_percent = numberValue(saved.promo_discount_percent) > 0 ? numberValue(saved.promo_discount_percent) : row.promo_discount_percent;
+      row.hidden = numberValue(saved.hidden) ? 1 : row.hidden;
+      row.customer_recommended = numberValue(saved.customer_recommended) ? 1 : row.customer_recommended;
+    });
     await postgresRest("products?sku=not.is.null", {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
@@ -1705,11 +1714,15 @@ async function handleCustomerTerms(payload, req, res) {
         updated_at: now,
       });
     } catch (error) {
-      if (!/terms_accepted_at|terms_version_accepted|schema cache|column/i.test(error.message || "")) throw error;
-      await postgresPatch("customer_call_profiles", `customer_no=eq.${encodeURIComponent(session.customer_no)}`, {
-        terms_accepted_at: now,
-        updated_at: now,
-      });
+      try {
+        if (!/terms_accepted_at|terms_version_accepted|schema cache|column/i.test(error.message || "")) throw error;
+        await postgresPatch("customer_call_profiles", `customer_no=eq.${encodeURIComponent(session.customer_no)}`, {
+          terms_accepted_at: now,
+          updated_at: now,
+        });
+      } catch (mirrorError) {
+        console.error("customer terms postgres mirror failed", mirrorError);
+      }
     }
   }
 
@@ -1765,6 +1778,7 @@ async function handleCustomerProducts(req, res) {
   const supplier = String(url.searchParams.get("supplier") || "").trim();
   const category = String(url.searchParams.get("category") || "").trim();
   const section = String(url.searchParams.get("section") || "recommended").trim();
+  const sort = String(url.searchParams.get("sort") || "customer").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 500);
   const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
@@ -1810,7 +1824,19 @@ async function handleCustomerProducts(req, res) {
       .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
       .map((row, index) => [String(row.sku || ""), index + 1]));
     const hasRecommendedProducts = visibleProducts.some((candidate) => numberValue(candidate.customer_quantity) > 0 || numberValue(candidate.customer_recommended) > 0);
-    const filtered = visibleProducts
+    const compareByCustomerSales = (a, b) =>
+      numberValue(b.customer_quantity) - numberValue(a.customer_quantity)
+      || numberValue(b.global_quantity) - numberValue(a.global_quantity)
+      || String(a.description || "").localeCompare(String(b.description || ""), "he");
+    const compareBySupplier = (a, b) =>
+      String(a.supplier || "").localeCompare(String(b.supplier || ""), "he")
+      || compareByCustomerSales(a, b);
+    const compareByName = (a, b) => String(a.description || "").localeCompare(String(b.description || ""), "he");
+    const sortProducts = (rows) => {
+      const compare = sort === "supplier" ? compareBySupplier : (sort === "name" ? compareByName : compareByCustomerSales);
+      return rows.slice().sort(compare);
+    };
+    const filtered = sortProducts(visibleProducts
       .filter((row) => {
         if (!query) return true;
         return [row.sku, row.description, row.category, row.supplier, row.barcode]
@@ -1819,7 +1845,7 @@ async function handleCustomerProducts(req, res) {
       .filter((row) => !supplier || String(row.supplier || "") === supplier)
       .filter((row) => !category || String(row.category || "") === category)
       .filter((row) => section !== "recommended" || numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0 || !hasRecommendedProducts)
-      .filter((row) => section !== "deals" || productPromoPrice(row) > 0)
+      .filter((row) => section !== "deals" || productPromoPrice(row) > 0))
       .slice(0, limit)
       .map((row) => {
         const listPrice = productListPrice(row);
