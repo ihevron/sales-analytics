@@ -612,6 +612,48 @@ async function handlePostgresProductsImport(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
 }
 
+async function handlePostgresProductSettings(payload, res) {
+  if (!requirePostgres(res)) return;
+  const skus = Array.isArray(payload.skus) ? payload.skus.map((sku) => String(sku || "").trim()).filter(Boolean) : [];
+  const values = payload.values && typeof payload.values === "object" ? payload.values : {};
+  const allowed = new Set(["sale_price", "promo_discount_percent", "hidden", "customer_recommended", "updated_at"]);
+  const row = {};
+  Object.entries(values).forEach(([key, value]) => {
+    if (!allowed.has(key)) return;
+    if (key === "hidden" || key === "customer_recommended") {
+      row[key] = value === true || value === 1 || value === "1" ? 1 : 0;
+      return;
+    }
+    row[key] = value;
+  });
+  row.updated_at = row.updated_at || new Date().toISOString();
+  if (!skus.length || !Object.keys(row).length) {
+    sendJson(res, 400, { ok: false, error: "skus and values are required" });
+    return;
+  }
+
+  const results = [];
+  for (const sku of skus) {
+    try {
+      await postgresPatch("products", `sku=eq.${encodeURIComponent(sku)}`, row);
+      results.push({ sku, ok: true });
+    } catch (error) {
+      if (!/sale_price|promo_discount_percent|hidden|customer_recommended|schema cache|column/i.test(error.message || "")) throw error;
+      const fallback = { ...row };
+      ["sale_price", "promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
+        if (new RegExp(key, "i").test(error.message || "")) delete fallback[key];
+      });
+      if (Object.keys(fallback).length <= 1) {
+        results.push({ sku, ok: false, error: error.message || "settings failed" });
+        continue;
+      }
+      await postgresPatch("products", `sku=eq.${encodeURIComponent(sku)}`, fallback);
+      results.push({ sku, ok: true, fallback: true });
+    }
+  }
+  sendJson(res, 200, { ok: true, source: "postgres", updated: results.filter((item) => item.ok).length, results });
+}
+
 async function existingPostgresProductSettings(skus) {
   const settings = new Map();
   for (let index = 0; index < skus.length; index += 150) {
@@ -2151,6 +2193,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/postgres/products-import" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => handlePostgresProductsImport(payload, res));
+    return;
+  }
+
+  if (requestPath === "/api/postgres/product-settings" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresProductSettings(payload, res));
     return;
   }
 

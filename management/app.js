@@ -1005,6 +1005,22 @@ async function importProductsToPostgres(products) {
   return data;
 }
 
+async function updatePostgresProductSettings(skus, values) {
+  try {
+    const response = await fetch("/api/postgres/product-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skus, values }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (data.configured === false) return data;
+    return { ok: response.ok && data.ok !== false, error: data.error || "" };
+  } catch (error) {
+    console.warn("Postgres product settings unavailable", error);
+    return { ok: false, error: error.message };
+  }
+}
+
 async function importCallCustomersFile(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -5546,7 +5562,13 @@ async function setCustomerAppProductsHidden(skus, hidden) {
     ...skus,
   ]);
   skus.forEach((sku) => saveProductCustomerSetting(sku, { hidden: hidden ? 1 : 0 }));
-  await persistDatabase();
+  const [persisted, postgres] = await Promise.all([
+    persistDatabase(),
+    updatePostgresProductSettings(skus, { hidden: hidden ? 1 : 0, updated_at: new Date().toISOString() }),
+  ]);
+  if (persisted.server.ok && postgres.ok === false) {
+    alert("ההסתרה נשמרה בקובץ הנתונים, אבל לא נשמרה ב-Supabase. בייבוא הבא ייתכן שיהיה צורך להסתיר שוב.");
+  }
   renderCustomerAppProducts();
 }
 
