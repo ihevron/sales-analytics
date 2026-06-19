@@ -571,7 +571,6 @@ async function handlePostgresProductsImport(payload, res) {
         standard_cost: standardCost,
         purchase_price: standardCost,
         sale_price: numberValue(product.base_price) || numberValue(product.sale_price),
-        promo_price: numberValue(product.sale_price),
         promo_discount_percent: numberValue(product.promo_discount_percent),
         weight: numberValue(product.weight),
         supplier: String(product.supplier || "").trim(),
@@ -589,8 +588,7 @@ async function handlePostgresProductsImport(payload, res) {
     const existingSettings = await existingPostgresProductSettings(rows.map((row) => row.sku));
     rows.forEach((row) => {
       const saved = existingSettings.get(String(row.sku || "")) || {};
-      row.sale_price = numberValue(saved.promo_price) > 0 ? numberValue(saved.promo_price) : row.sale_price;
-      row.promo_price = numberValue(saved.promo_price) > 0 ? numberValue(saved.promo_price) : row.promo_price;
+      row.sale_price = numberValue(saved.sale_price) > 0 ? numberValue(saved.sale_price) : row.sale_price;
       row.promo_discount_percent = numberValue(saved.promo_discount_percent) > 0 ? numberValue(saved.promo_discount_percent) : row.promo_discount_percent;
       row.hidden = numberValue(saved.hidden) ? 1 : row.hidden;
       row.customer_recommended = numberValue(saved.customer_recommended) ? 1 : row.customer_recommended;
@@ -605,7 +603,7 @@ async function handlePostgresProductsImport(payload, res) {
       }
     } catch (error) {
       if (!/image_url|promo_price|promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rowsWithoutImages = rows.map(({ image_url, promo_price, promo_discount_percent, customer_recommended, hidden, ...row }) => row);
+      const rowsWithoutImages = rows.map(({ image_url, promo_discount_percent, customer_recommended, hidden, ...row }) => row);
       for (let index = 0; index < rowsWithoutImages.length; index += 500) {
         await postgresUpsert("products", rowsWithoutImages.slice(index, index + 500), "sku");
       }
@@ -619,11 +617,11 @@ async function existingPostgresProductSettings(skus) {
   for (let index = 0; index < skus.length; index += 150) {
     const chunk = skus.slice(index, index + 150).map((sku) => `"${String(sku).replaceAll('"', '\\"')}"`).join(",");
     try {
-      const rows = await postgresRows(`products?select=sku,promo_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${chunk})&limit=1000`);
+      const rows = await postgresRows(`products?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${chunk})&limit=1000`);
       rows.forEach((row) => settings.set(String(row.sku), row));
     } catch (error) {
-      if (!/customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rows = await postgresRows(`products?select=sku,promo_price,promo_discount_percent&sku=in.(${chunk})&limit=1000`);
+      if (!/promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
+      const rows = await postgresRows(`products?select=sku,sale_price&sku=in.(${chunk})&limit=1000`);
       rows.forEach((row) => settings.set(String(row.sku), row));
     }
   }
