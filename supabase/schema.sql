@@ -45,6 +45,30 @@ create table if not exists public.product_customer_settings (
 create index if not exists idx_product_customer_settings_hidden on public.product_customer_settings (hidden);
 create index if not exists idx_product_customer_settings_recommended on public.product_customer_settings (customer_recommended);
 
+insert into public.product_customer_settings
+  (sku, sale_price, promo_discount_percent, hidden, customer_recommended, updated_at)
+select
+  sku,
+  coalesce(sale_price, 0),
+  coalesce(promo_discount_percent, 0),
+  coalesce(hidden, 0),
+  coalesce(customer_recommended, 0),
+  coalesce(updated_at, now())
+from public.products
+where coalesce(sku, '') <> ''
+  and (
+    coalesce(sale_price, 0) > 0
+    or coalesce(promo_discount_percent, 0) > 0
+    or coalesce(hidden, 0) <> 0
+    or coalesce(customer_recommended, 0) <> 0
+  )
+on conflict (sku) do update set
+  sale_price = excluded.sale_price,
+  promo_discount_percent = excluded.promo_discount_percent,
+  hidden = excluded.hidden,
+  customer_recommended = excluded.customer_recommended,
+  updated_at = excluded.updated_at;
+
 create table if not exists public.sales_raw (
   id bigserial primary key,
   sale_date date,
