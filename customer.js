@@ -2,6 +2,7 @@ const VAT_RATE = 0.18;
 const TOKEN_KEY = "customerOrderToken";
 const CUSTOMER_KEY = "customerOrderProfile";
 const CART_KEY = "customerOrderCart";
+const TERMS_VERSION_KEY = "customerOrderTermsVersion";
 const FALLBACK_IMAGE = "./management/wa-logo.png";
 
 const SECTION_TEXT = {
@@ -49,6 +50,7 @@ const state = {
   quantitySku: "",
   loginMode: "existing",
   termsMode: "customer",
+  termsPromptOpen: false,
   settings: { ...DEFAULT_CUSTOMER_SETTINGS },
 };
 
@@ -112,7 +114,7 @@ async function init() {
 
   if (state.token && state.customer) {
     showApp();
-    if (state.customer.terms_accepted_at) {
+    if (hasValidTermsAcceptance()) {
       loadProducts();
     } else {
       showTermsModal();
@@ -141,6 +143,15 @@ function applyCustomerSettings() {
   document.getElementById("login-subtitle").textContent = state.settings.loginSubtitle || DEFAULT_CUSTOMER_SETTINGS.loginSubtitle;
   document.getElementById("terms-text").textContent = state.settings.termsText || DEFAULT_CUSTOMER_SETTINGS.termsText;
   document.getElementById("warranty-text").textContent = state.settings.warrantyText || DEFAULT_CUSTOMER_SETTINGS.warrantyText;
+}
+
+function hasValidTermsAcceptance() {
+  const acceptedAt = Date.parse(state.customer?.terms_accepted_at || "");
+  if (!acceptedAt) return false;
+  if (Date.now() - acceptedAt > 1000 * 60 * 60 * 24 * 30) return false;
+  const currentVersion = String(state.settings.termsVersion || "").trim();
+  const acceptedVersion = String(state.customer?.terms_version_accepted || localStorage.getItem(TERMS_VERSION_KEY) || "").trim();
+  return !(currentVersion && acceptedVersion && acceptedVersion !== currentVersion);
 }
 
 function safeJson(raw, fallback) {
@@ -202,7 +213,7 @@ async function handleAuthSuccess(data) {
   localStorage.setItem(TOKEN_KEY, state.token);
   localStorage.setItem(CUSTOMER_KEY, JSON.stringify(state.customer));
   showApp();
-  if (data.requires_terms || !state.customer?.terms_accepted_at) {
+  if (data.requires_terms || !hasValidTermsAcceptance()) {
     showTermsModal();
     return;
   }
@@ -257,6 +268,7 @@ function logout() {
   state.products = [];
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_KEY);
+  localStorage.removeItem(TERMS_VERSION_KEY);
   localStorage.removeItem(CART_KEY);
   closeCart();
   closeQuantitySheet();
@@ -265,7 +277,9 @@ function logout() {
 }
 
 function showTermsModal(mode = "customer") {
+  if (state.termsPromptOpen && state.termsMode === mode) return;
   state.termsMode = mode;
+  state.termsPromptOpen = true;
   document.getElementById("terms-modal").hidden = false;
   document.body.classList.add("terms-open");
   document.getElementById("terms-accept").checked = false;
@@ -275,6 +289,7 @@ function showTermsModal(mode = "customer") {
 }
 
 function closeTermsModal() {
+  state.termsPromptOpen = false;
   document.getElementById("terms-modal").hidden = true;
   document.body.classList.remove("terms-open");
 }
@@ -299,8 +314,12 @@ async function acceptTerms() {
     state.customer = data.customer || {
       ...state.customer,
       terms_accepted_at: new Date().toISOString(),
+      terms_version_accepted: state.settings.termsVersion || "",
     };
     localStorage.setItem(CUSTOMER_KEY, JSON.stringify(state.customer));
+    if (state.customer.terms_version_accepted || state.settings.termsVersion) {
+      localStorage.setItem(TERMS_VERSION_KEY, state.customer.terms_version_accepted || state.settings.termsVersion);
+    }
     closeTermsModal();
     await loadProducts();
   } catch {
@@ -343,7 +362,7 @@ async function loadProducts() {
   } catch (error) {
     if (/unauthorized/i.test(error.message)) logout();
     if (/terms_required/i.test(error.message)) {
-      showTermsModal();
+      if (!hasValidTermsAcceptance()) showTermsModal();
       return;
     }
     grid.innerHTML = `<div class="empty-state">לא ניתן לטעון מוצרים כרגע</div>`;

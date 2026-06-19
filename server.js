@@ -357,7 +357,16 @@ async function withCurrentSqliteDatabase(task) {
   }
 }
 
-async function handleCustomerSettings(res) {
+function customerTermsVersion(values = {}) {
+  return crypto.createHash("sha256")
+    .update(String(values.customer_terms_text || ""))
+    .update("\n---\n")
+    .update(String(values.customer_warranty_text || ""))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+async function loadCustomerSettingsValues() {
   const values = { ...CUSTOMER_APP_SETTING_DEFAULTS };
   try {
     await withCurrentSqliteDatabase((db) => {
@@ -379,6 +388,15 @@ async function handleCustomerSettings(res) {
   } catch (error) {
     console.error("customer settings lookup failed", error);
   }
+  return values;
+}
+
+async function getCustomerTermsVersion() {
+  return customerTermsVersion(await loadCustomerSettingsValues());
+}
+
+async function handleCustomerSettings(res) {
+  const values = await loadCustomerSettingsValues();
   sendJson(res, 200, {
     ok: true,
     settings: {
@@ -386,6 +404,7 @@ async function handleCustomerSettings(res) {
       loginSubtitle: values.customer_login_subtitle,
       termsText: values.customer_terms_text,
       warrantyText: values.customer_warranty_text,
+      termsVersion: customerTermsVersion(values),
     },
   });
 }
@@ -699,6 +718,7 @@ async function handlePostgresCallProfilesImport(payload, res) {
         address: [...new Set(addressParts)].join(", "),
         company_id: String(profile.company_id || "").trim(),
         terms_accepted_at: profile.terms_accepted_at || null,
+        terms_version_accepted: profile.terms_version_accepted || null,
         customer_type: String(profile.customer_type || "existing").trim() || "existing",
         call_days: String(profile.call_days || profile.days || "").trim(),
         source: "calls",
@@ -713,15 +733,16 @@ async function handlePostgresCallProfilesImport(payload, res) {
     for (let index = 0; index < customerNos.length; index += 150) {
       const chunk = customerNos.slice(index, index + 150).map((customerNo) => `"${String(customerNo).replaceAll('"', '\\"')}"`).join(",");
       try {
-        const existingRows = await postgresRows(`customer_call_profiles?select=customer_no,terms_accepted_at,customer_type&customer_no=in.(${chunk})&limit=1000`);
+        const existingRows = await postgresRows(`customer_call_profiles?select=customer_no,terms_accepted_at,terms_version_accepted,customer_type&customer_no=in.(${chunk})&limit=1000`);
         existingRows.forEach((row) => existingByCustomer.set(String(row.customer_no), row));
       } catch (error) {
-        if (!/terms_accepted_at|customer_type|schema cache|column/i.test(error.message || "")) throw error;
+        if (!/terms_accepted_at|terms_version_accepted|customer_type|schema cache|column/i.test(error.message || "")) throw error;
       }
     }
     rows.forEach((row) => {
       const existing = existingByCustomer.get(String(row.customer_no)) || {};
       if (!row.terms_accepted_at && existing.terms_accepted_at) row.terms_accepted_at = existing.terms_accepted_at;
+      if (!row.terms_version_accepted && existing.terms_version_accepted) row.terms_version_accepted = existing.terms_version_accepted;
       if ((row.customer_type === "existing" || !row.customer_type) && existing.customer_type) row.customer_type = existing.customer_type;
     });
     for (let index = 0; index < customerNos.length; index += 150) {
@@ -738,8 +759,8 @@ async function handlePostgresCallProfilesImport(payload, res) {
     try {
       await postgresUpsert("customer_call_profiles", rows, "customer_no");
     } catch (error) {
-      if (!/company_id|terms_accepted_at|customer_type|schema cache|column/i.test(error.message || "")) throw error;
-      await postgresUpsert("customer_call_profiles", rows.map(({ company_id, terms_accepted_at, customer_type, ...row }) => row), "customer_no");
+      if (!/company_id|terms_accepted_at|terms_version_accepted|customer_type|schema cache|column/i.test(error.message || "")) throw error;
+      await postgresUpsert("customer_call_profiles", rows.map(({ company_id, terms_accepted_at, terms_version_accepted, customer_type, ...row }) => row), "customer_no");
     }
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
@@ -1098,6 +1119,7 @@ function ensureServerCustomerPortalSchema(db) {
       address TEXT,
       company_id TEXT,
       terms_accepted_at TEXT,
+      terms_version_accepted TEXT,
       customer_type TEXT DEFAULT 'existing',
       days TEXT,
       source TEXT DEFAULT 'calls',
@@ -1441,9 +1463,10 @@ async function findCustomerProfile(customerNo) {
     ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "terms_version_accepted", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
     const rows = sqliteRows(db, `
-      SELECT customer_no, customer_name, phone, phone2, address, company_id, terms_accepted_at, customer_type
+      SELECT customer_no, customer_name, phone, phone2, address, company_id, terms_accepted_at, terms_version_accepted, customer_type
       FROM customer_call_profiles
       WHERE customer_no = ? AND COALESCE(source, 'calls') IN ('calls', 'customer_portal')
       LIMIT 1
@@ -1460,13 +1483,16 @@ function normalizeCustomerProfile(profile) {
     phone: String(profile.phone || profile.phone2 || ""),
     customer_type: String(profile.customer_type || "existing"),
     terms_accepted_at: profile.terms_accepted_at || "",
+    terms_version_accepted: profile.terms_version_accepted || "",
   };
 }
 
-function shouldRequireTermsAcceptance(profile) {
+function shouldRequireTermsAcceptance(profile, termsVersion = "") {
   const acceptedAt = Date.parse(profile?.terms_accepted_at || "");
   if (!acceptedAt) return true;
-  return Date.now() - acceptedAt > 1000 * 60 * 60 * 24 * 30;
+  if (Date.now() - acceptedAt > 1000 * 60 * 60 * 24 * 30) return true;
+  const acceptedVersion = String(profile?.terms_version_accepted || "").trim();
+  return Boolean(termsVersion && acceptedVersion && acceptedVersion !== termsVersion);
 }
 
 async function handleCustomerLogin(payload, res) {
@@ -1483,10 +1509,11 @@ async function handleCustomerLogin(payload, res) {
     return;
   }
 
+  const termsVersion = await getCustomerTermsVersion();
   sendJson(res, 200, {
     ok: true,
     token: createCustomerToken(profile.customer_no),
-    requires_terms: shouldRequireTermsAcceptance(profile),
+    requires_terms: shouldRequireTermsAcceptance(profile, termsVersion),
     customer: normalizeCustomerProfile(profile),
   });
 }
@@ -1503,6 +1530,7 @@ async function handleCustomerRegister(payload, res) {
   }
 
   const now = new Date().toISOString();
+  const termsVersion = await getCustomerTermsVersion();
   const customerNo = `NEW-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
   const profile = {
     customer_no: customerNo,
@@ -1517,6 +1545,7 @@ async function handleCustomerRegister(payload, res) {
     source: "customer_portal",
     customer_type: "new",
     terms_accepted_at: now,
+    terms_version_accepted: termsVersion,
     updated_at: now,
   };
 
@@ -1527,15 +1556,16 @@ async function handleCustomerRegister(payload, res) {
     ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "terms_version_accepted", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
     ensureServerColumn(db, "customer_call_profiles", "phone2", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "city", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "days", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
     db.run(`
-      INSERT INTO customer_call_profiles (customer_no, customer_name, phone, phone2, city, address, company_id, days, source, customer_type, terms_accepted_at, updated_at)
-      VALUES (?, ?, ?, '', '', ?, ?, '', 'customer_portal', 'new', ?, ?)
-    `, [customerNo, customerName, phone, address, companyId, now, now]);
+      INSERT INTO customer_call_profiles (customer_no, customer_name, phone, phone2, city, address, company_id, days, source, customer_type, terms_accepted_at, terms_version_accepted, updated_at)
+      VALUES (?, ?, ?, '', '', ?, ?, '', 'customer_portal', 'new', ?, ?, ?)
+    `, [customerNo, customerName, phone, address, companyId, now, termsVersion, now]);
     const exported = Buffer.from(db.export());
     await writeCurrentDatabaseBuffer(exported);
   } finally {
@@ -1554,9 +1584,16 @@ async function handleCustomerRegister(payload, res) {
         source: profile.source,
         customer_type: profile.customer_type,
         terms_accepted_at: profile.terms_accepted_at,
+        terms_version_accepted: profile.terms_version_accepted,
         updated_at: profile.updated_at,
       };
-      await postgresUpsert("customer_call_profiles", [postgresProfile], "customer_no");
+      try {
+        await postgresUpsert("customer_call_profiles", [postgresProfile], "customer_no");
+      } catch (error) {
+        if (!/terms_version_accepted|schema cache|column/i.test(error.message || "")) throw error;
+        const { terms_version_accepted, ...fallbackProfile } = postgresProfile;
+        await postgresUpsert("customer_call_profiles", [fallbackProfile], "customer_no");
+      }
     } catch (error) {
       console.error("customer registration postgres mirror failed", error);
     }
@@ -1583,6 +1620,7 @@ async function handleCustomerTerms(payload, req, res) {
   }
 
   const now = new Date().toISOString();
+  const termsVersion = await getCustomerTermsVersion();
   const SQL = await initServerSql();
   const data = await readCurrentDatabaseBuffer();
   const db = new SQL.Database(new Uint8Array(data));
@@ -1590,10 +1628,11 @@ async function handleCustomerTerms(payload, req, res) {
   try {
     ensureServerCustomerPortalSchema(db);
     ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "terms_version_accepted", "TEXT");
     ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
-    db.run("UPDATE customer_call_profiles SET terms_accepted_at = ?, updated_at = ? WHERE customer_no = ?", [now, now, session.customer_no]);
+    db.run("UPDATE customer_call_profiles SET terms_accepted_at = ?, terms_version_accepted = ?, updated_at = ? WHERE customer_no = ?", [now, termsVersion, now, session.customer_no]);
     profile = sqliteRows(db, `
-      SELECT customer_no, customer_name, phone, phone2, address, company_id, terms_accepted_at, customer_type
+      SELECT customer_no, customer_name, phone, phone2, address, company_id, terms_accepted_at, terms_version_accepted, customer_type
       FROM customer_call_profiles
       WHERE customer_no = ?
       LIMIT 1
@@ -1608,10 +1647,15 @@ async function handleCustomerTerms(payload, req, res) {
     try {
       await postgresPatch("customer_call_profiles", `customer_no=eq.${encodeURIComponent(session.customer_no)}`, {
         terms_accepted_at: now,
+        terms_version_accepted: termsVersion,
         updated_at: now,
       });
     } catch (error) {
-      if (!/terms_accepted_at|schema cache|column/i.test(error.message || "")) throw error;
+      if (!/terms_accepted_at|terms_version_accepted|schema cache|column/i.test(error.message || "")) throw error;
+      await postgresPatch("customer_call_profiles", `customer_no=eq.${encodeURIComponent(session.customer_no)}`, {
+        terms_accepted_at: now,
+        updated_at: now,
+      });
     }
   }
 
@@ -1656,7 +1700,8 @@ async function handleCustomerProducts(req, res) {
     sendJson(res, 404, { ok: false, error: "customer not found" });
     return;
   }
-  if (shouldRequireTermsAcceptance(profile)) {
+  const termsVersion = await getCustomerTermsVersion();
+  if (shouldRequireTermsAcceptance(profile, termsVersion)) {
     sendJson(res, 403, { ok: false, error: "terms_required" });
     return;
   }
@@ -1779,7 +1824,8 @@ async function handleCustomerOrder(payload, req, res) {
     sendJson(res, 404, { ok: false, error: "customer not found" });
     return;
   }
-  if (shouldRequireTermsAcceptance(profile)) {
+  const termsVersion = await getCustomerTermsVersion();
+  if (shouldRequireTermsAcceptance(profile, termsVersion)) {
     sendJson(res, 403, { ok: false, error: "terms_required" });
     return;
   }
