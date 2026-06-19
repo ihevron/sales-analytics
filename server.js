@@ -597,19 +597,37 @@ async function handlePostgresProductsImport(payload, res) {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
     });
-    try {
-      for (let index = 0; index < rows.length; index += 500) {
-        await postgresUpsert("products", rows.slice(index, index + 500), "sku");
-      }
-    } catch (error) {
-      if (!/image_url|promo_price|promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rowsWithoutImages = rows.map(({ image_url, promo_discount_percent, customer_recommended, hidden, ...row }) => row);
-      for (let index = 0; index < rowsWithoutImages.length; index += 500) {
-        await postgresUpsert("products", rowsWithoutImages.slice(index, index + 500), "sku");
-      }
-    }
+    await upsertProductRowsWithColumnFallback(rows);
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+}
+
+async function upsertProductRowsWithColumnFallback(rows) {
+  const optionalColumns = ["image_url", "promo_price", "promo_discount_percent", "customer_recommended", "hidden"];
+  let currentRows = rows;
+  const removedColumns = new Set();
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt += 1) {
+    try {
+      for (let index = 0; index < currentRows.length; index += 500) {
+        await postgresUpsert("products", currentRows.slice(index, index + 500), "sku");
+      }
+      return;
+    } catch (error) {
+      const message = error.message || "";
+      if (!/schema cache|column|does not exist|PGRST/i.test(message)) throw error;
+      const missingColumn = optionalColumns.find((column) =>
+        !removedColumns.has(column) && new RegExp(`(^|[^a-z0-9_])${column}([^a-z0-9_]|$)`, "i").test(message)
+      );
+      if (!missingColumn) throw error;
+      removedColumns.add(missingColumn);
+      console.warn(`products import retrying without missing column: ${missingColumn}`);
+      currentRows = currentRows.map((row) => {
+        const next = { ...row };
+        delete next[missingColumn];
+        return next;
+      });
+    }
+  }
 }
 
 async function handlePostgresProductSettings(payload, res) {
