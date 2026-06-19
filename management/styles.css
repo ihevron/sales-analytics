@@ -352,7 +352,19 @@ th, td {
 }
 
 .suggested-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  background: #fef2f2;
   color: var(--danger);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1;
 }
 
 .suggested-product-button {

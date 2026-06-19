@@ -2499,7 +2499,7 @@ function renderSuggestedProducts() {
     { key: "returns_percent", label: "% חזרות", render: (row) => `<span class="${returnPercentClass(row.returns_percent)}">${percent(row.returns_percent)}</span>` },
     { key: "actions", label: "פעולה", sortable: false, render: (row) => `
       <div class="suggested-actions">
-        <button class="icon-button suggested-remove" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה">X</button>
+        <button class="suggested-remove" type="button" data-dismiss-suggested="${escapeAttr(row.sku)}" title="הסרה מהרשימה" aria-label="הסרת מוצר מהרשימה">X</button>
       </div>
     ` },
   ], "suggested", "weekly_quantity", "desc");
