@@ -511,6 +511,14 @@ async function handlePostgresProductsImport(payload, res) {
     .map((row) => [row.sku, row])).values()];
 
   if (rows.length) {
+    const existingSettings = await existingPostgresProductSettings(rows.map((row) => row.sku));
+    rows.forEach((row) => {
+      const existing = existingSettings.get(String(row.sku)) || {};
+      if (numberValue(existing.promo_price) > 0) row.promo_price = numberValue(existing.promo_price);
+      if (numberValue(existing.promo_discount_percent) > 0) row.promo_discount_percent = numberValue(existing.promo_discount_percent);
+      if (Object.hasOwn(existing, "customer_recommended")) row.customer_recommended = numberValue(existing.customer_recommended) ? 1 : 0;
+      if (Object.hasOwn(existing, "hidden")) row.hidden = numberValue(existing.hidden) ? 1 : 0;
+    });
     await postgresRest("products?sku=not.is.null", {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
@@ -520,14 +528,30 @@ async function handlePostgresProductsImport(payload, res) {
         await postgresUpsert("products", rows.slice(index, index + 500), "sku");
       }
     } catch (error) {
-      if (!/image_url|promo_price|promo_discount_percent|schema cache|column/i.test(error.message || "")) throw error;
-      const rowsWithoutImages = rows.map(({ image_url, promo_price, promo_discount_percent, ...row }) => row);
+      if (!/image_url|promo_price|promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
+      const rowsWithoutImages = rows.map(({ image_url, promo_price, promo_discount_percent, customer_recommended, hidden, ...row }) => row);
       for (let index = 0; index < rowsWithoutImages.length; index += 500) {
         await postgresUpsert("products", rowsWithoutImages.slice(index, index + 500), "sku");
       }
     }
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+}
+
+async function existingPostgresProductSettings(skus) {
+  const settings = new Map();
+  for (let index = 0; index < skus.length; index += 150) {
+    const chunk = skus.slice(index, index + 150).map((sku) => `"${String(sku).replaceAll('"', '\\"')}"`).join(",");
+    try {
+      const rows = await postgresRows(`products?select=sku,promo_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${chunk})&limit=1000`);
+      rows.forEach((row) => settings.set(String(row.sku), row));
+    } catch (error) {
+      if (!/customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
+      const rows = await postgresRows(`products?select=sku,promo_price,promo_discount_percent&sku=in.(${chunk})&limit=1000`);
+      rows.forEach((row) => settings.set(String(row.sku), row));
+    }
+  }
+  return settings;
 }
 
 async function assertProductsImportSchema() {

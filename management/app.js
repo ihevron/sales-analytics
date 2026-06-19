@@ -825,10 +825,14 @@ function importProductRows(rows) {
   const products = [];
   ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
-  const existingProductFlags = new Map(queryRows("SELECT sku, hidden, customer_recommended FROM products")
+  ensureColumn("products", "sale_price", "REAL DEFAULT 0");
+  ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  const existingProductSettings = new Map(queryRows("SELECT sku, hidden, customer_recommended, sale_price, promo_discount_percent FROM products")
     .map((row) => [String(row.sku || ""), {
       hidden: number(row.hidden) ? 1 : 0,
       customer_recommended: number(row.customer_recommended) ? 1 : 0,
+      sale_price: number(row.sale_price),
+      promo_discount_percent: number(row.promo_discount_percent),
     }]));
   const stmt = state.db.prepare(`
     INSERT INTO products
@@ -872,10 +876,17 @@ function importProductRows(rows) {
       updated_at: now,
     };
     product.purchase_price = product.standard_cost;
+    const savedSettings = existingProductSettings.get(product.sku) || {};
+    const hiddenValue = text(mapped.hidden) ? product.hidden : (savedSettings.hidden || 0);
+    const promoPrice = savedSettings.sale_price > 0 ? savedSettings.sale_price : product.sale_price;
+    const promoDiscount = savedSettings.promo_discount_percent > 0 ? savedSettings.promo_discount_percent : product.promo_discount_percent;
+    const customerRecommended = savedSettings.customer_recommended || 0;
+    product.sale_price = promoPrice;
+    product.promo_discount_percent = promoDiscount;
+    product.hidden = hiddenValue;
+    product.customer_recommended = customerRecommended;
     products.push(product);
-    const savedFlags = existingProductFlags.get(product.sku) || { hidden: 0, customer_recommended: 0 };
-    const hiddenValue = text(mapped.hidden) ? product.hidden : savedFlags.hidden;
-    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, product.sale_price, product.promo_discount_percent, product.weight, product.supplier, product.pick_order, product.units_per_carton, hiddenValue, savedFlags.customer_recommended, now]);
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, promoPrice, promoDiscount, product.weight, product.supplier, product.pick_order, product.units_per_carton, hiddenValue, customerRecommended, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
