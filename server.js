@@ -967,8 +967,19 @@ async function handlePostgresOrderPatch(payload, res) {
   row.updated_at = row.updated_at || new Date().toISOString();
   let postgresResult = { ok: true, skipped: true };
   if (usePostgresPreview) {
-    await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
-    postgresResult = { ok: true, skipped: false };
+    try {
+      await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
+      postgresResult = { ok: true, skipped: false };
+    } catch (error) {
+      if (!/customer_orders|schema cache|relation|does not exist|PGRST/i.test(error.message || "")) throw error;
+      console.warn("postgres order patch skipped; customer_orders table is unavailable", error.message || error);
+      postgresResult = {
+        ok: false,
+        skipped: true,
+        missingSchema: true,
+        error: error.message || "customer_orders table is unavailable",
+      };
+    }
   }
   const sqliteResult = await patchSqliteOrder(orderId, row);
   sendJson(res, 200, { ok: true, source: "sqlite+postgres", sqlite: sqliteResult, postgres: postgresResult });
