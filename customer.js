@@ -360,7 +360,7 @@ async function loadProducts() {
   const grid = document.getElementById("product-grid");
   grid.innerHTML = `<div class="empty-state">טוען מוצרים...</div>`;
   try {
-    const params = new URLSearchParams({ limit: "300", section: state.section, sort: state.sort });
+    const params = new URLSearchParams({ limit: state.section === "all" ? "3000" : "300", section: state.section, sort: state.sort });
     if (state.search) params.set("q", state.search);
     if (state.supplier) params.set("supplier", state.supplier);
     if (state.category) params.set("category", state.category);

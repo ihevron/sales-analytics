@@ -2037,7 +2037,7 @@ async function handleCustomerProducts(req, res) {
   const category = String(url.searchParams.get("category") || "").trim();
   const section = String(url.searchParams.get("section") || "recommended").trim();
   const sort = String(url.searchParams.get("sort") || "pick").trim();
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 500);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 3000);
   const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
     const select = [
