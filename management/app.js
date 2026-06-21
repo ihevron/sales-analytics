@@ -82,6 +82,9 @@ const state = {
   manualInvoiceProduct: null,
   persistTimer: null,
   serverSaveInProgress: false,
+  databaseVersion: "",
+  autoRefreshTimer: null,
+  lastUserActivityAt: Date.now(),
   pendingPickingChanges: [],
   callTemplates: loadCallTemplates(),
   selectedCallTemplateId: "weekly",
@@ -219,6 +222,8 @@ async function init() {
   await refreshAll();
   await runScheduledCallReset({ refresh: true });
   startWeeklyCallResetTimer();
+  bindAutoRefreshActivityTracking();
+  startAutoRefreshTimer();
   setStatus("מוכן לעבודה");
 }
 
@@ -2674,46 +2679,16 @@ async function saveOrder() {
     acc.profit += signedUnits * number(item.estimated_profit_per_unit);
     return acc;
   }, { total: 0, profit: 0 });
-  state.db.run(`
-    INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at, client_order_key)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [orderDate, state.orderCustomer.customer_no, state.orderCustomer.customer_name, status, notes, totals.total, totals.profit, now, clientOrderKey]);
-  const orderId = scalar("SELECT last_insert_rowid()");
-  const stmt = state.db.prepare(`
-    INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, entry_sequence, is_carton, units_per_carton, estimated_price, estimated_profit)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  state.orderItems.forEach((item) => {
-    if (number(item.quantity) > 0) {
-      const status = item.is_return ? "return" : "pending";
-      const pickedQuantity = item.is_return ? number(item.quantity) : 0;
-      const signedUnits = item.is_return ? -orderLineUnits(item) : orderLineUnits(item);
-      stmt.run([
-        orderId,
-        item.sku,
-        item.product_desc,
-        number(item.quantity),
-        pickedQuantity,
-        text(item.note),
-        status,
-        number(item.entry_sequence),
-        item.is_carton ? 1 : 0,
-        number(item.units_per_carton) || 1,
-        number(item.estimated_price),
-        number(item.estimated_profit_per_unit) * signedUnits,
-      ]);
-    }
-  });
-  stmt.free();
-  markCustomerOrderedCall(state.orderCustomer.customer_no, state.orderCustomer.customer_name, orderDate);
+  state.serverSaveInProgress = true;
   const serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
-  await writeBrowserDatabase(state.db.export());
+  state.serverSaveInProgress = false;
   if (serverResult.ok) {
     await reloadDatabaseFromServer();
   } else {
-    alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשמרה בדפדפן הזה בלבד.`);
+    alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשארה על המסך ולא נשמרה, כדי לא לדרוס נתונים ממחשב ישן.`);
+    return;
   }
-  alert(`הזמנה ${serverResult.orderId || orderId} נשמרה`);
+  alert(`הזמנה ${serverResult.orderId || ""} נשמרה`);
   resetOrder({ clearCustomer: true });
   renderPicking();
   renderOrderHistory();
@@ -5890,6 +5865,7 @@ async function readServerDatabase() {
   try {
     const response = await fetch("/api/db", { cache: "no-store" });
     if (!response.ok) return null;
+    state.databaseVersion = response.headers.get("X-Database-Version") || "";
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     console.warn("לא ניתן לטעון בסיס נתונים מהשרת", error);
@@ -5989,8 +5965,18 @@ function writeBrowserDatabase(data) {
 
 async function writeServerDatabase(data) {
   try {
-    const response = await fetch("/api/db", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: data });
-    if (response.ok) return { ok: true };
+    const headers = { "Content-Type": "application/octet-stream" };
+    if (state.databaseVersion) headers["If-Match"] = state.databaseVersion;
+    const response = await fetch("/api/db", { method: "POST", headers, body: data });
+    const nextVersion = response.headers.get("X-Database-Version") || "";
+    if (response.ok) {
+      if (nextVersion) state.databaseVersion = nextVersion;
+      return { ok: true };
+    }
+    if (response.status === 409) {
+      if (nextVersion) state.databaseVersion = nextVersion;
+      return { ok: false, conflict: true, error: "הנתונים בשרת השתנו. צריך לרענן לפני שמירה כדי לא לדרוס עבודה ממחשב אחר." };
+    }
     return { ok: false, error: await response.text() };
   } catch (error) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
@@ -6050,4 +6036,50 @@ async function reloadDatabaseFromServer() {
   ensureSummaryTables();
   await writeBrowserDatabase(data);
   return true;
+}
+
+function bindAutoRefreshActivityTracking() {
+  ["input", "change", "keydown", "pointerdown", "touchstart"].forEach((eventName) => {
+    document.addEventListener(eventName, () => {
+      state.lastUserActivityAt = Date.now();
+    }, { passive: true });
+  });
+}
+
+function startAutoRefreshTimer() {
+  if (state.autoRefreshTimer) clearInterval(state.autoRefreshTimer);
+  state.autoRefreshTimer = setInterval(runSafeAutoRefresh, 10 * 60 * 1000);
+}
+
+function hasOpenModal() {
+  return [...document.querySelectorAll(".modal, .dialog, [role='dialog']")]
+    .some((element) => !element.hidden && !element.classList.contains("hidden"));
+}
+
+function isEditingNow() {
+  const active = document.activeElement;
+  return Boolean(active && (
+    active.matches?.("input, textarea, select, [contenteditable='true']") ||
+    active.closest?.("form")
+  ));
+}
+
+function hasUnsavedScreenWork() {
+  return Boolean(
+    state.orderItems.length ||
+    state.pendingProduct ||
+    state.persistTimer ||
+    state.serverSaveInProgress ||
+    state.pendingPickingChanges.length ||
+    hasOpenModal() ||
+    isEditingNow()
+  );
+}
+
+async function runSafeAutoRefresh() {
+  if (document.hidden) return;
+  if (Date.now() - state.lastUserActivityAt < 60 * 1000) return;
+  if (hasUnsavedScreenWork()) return;
+  setStatus("מרענן נתונים אוטומטית");
+  window.location.reload();
 }

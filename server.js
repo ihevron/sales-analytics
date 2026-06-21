@@ -84,6 +84,14 @@ function sendJson(res, status, body) {
   send(res, status, JSON.stringify(body), { "Content-Type": "application/json; charset=utf-8" });
 }
 
+function databaseVersion(body) {
+  return crypto.createHash("sha256").update(body).digest("hex");
+}
+
+function requestDatabaseVersion(req) {
+  return String(req.headers["if-match"] || req.headers["x-database-version"] || "").replace(/^"|"$/g, "").trim();
+}
+
 function supabaseObjectUrl() {
   const objectPath = supabaseDbObject.split("/").map(encodeURIComponent).join("/");
   return `${supabaseUrl}/storage/v1/object/${encodeURIComponent(supabaseBucket)}/${objectPath}`;
@@ -1186,6 +1194,7 @@ async function handleDatabaseGet(res) {
     send(res, 200, data, {
       "Content-Type": "application/octet-stream",
       "Cache-Control": "no-store",
+      "X-Database-Version": databaseVersion(data),
     });
   } catch (error) {
     send(res, error.status === 404 ? 404 : 500, error.status === 404 ? "" : "database read failed");
@@ -1224,20 +1233,44 @@ function handleDatabasePost(req, res) {
     }
 
     if (useSupabase) {
-      enqueueDbMutation(() => writeDatabaseToSupabase(body))
-        .then(() => send(res, 204))
+      enqueueDbMutation(async () => {
+        const current = await readCurrentDatabaseBuffer();
+        const currentVersion = databaseVersion(current);
+        const expectedVersion = requestDatabaseVersion(req);
+        if (!expectedVersion || expectedVersion !== currentVersion) {
+          const error = new Error("database version conflict; refresh before saving");
+          error.status = 409;
+          error.currentVersion = currentVersion;
+          throw error;
+        }
+        await writeDatabaseToSupabase(body);
+        return databaseVersion(body);
+      })
+        .then((newVersion) => send(res, 204, "", { "X-Database-Version": newVersion }))
         .catch((error) => {
           console.error(error);
-          send(res, 500, error.message || "save failed");
+          send(res, error.status || 500, error.message || "save failed", error.currentVersion ? { "X-Database-Version": error.currentVersion } : {});
         });
       return;
     }
 
-    enqueueDbMutation(() => writeCurrentDatabaseBuffer(body))
-      .then(() => send(res, 204))
+    enqueueDbMutation(async () => {
+      const current = await readCurrentDatabaseBuffer();
+      const currentVersion = databaseVersion(current);
+      const expectedVersion = requestDatabaseVersion(req);
+      if (!expectedVersion || expectedVersion !== currentVersion) {
+        const error = new Error("database version conflict; refresh before saving");
+        error.status = 409;
+        error.currentVersion = currentVersion;
+        throw error;
+      }
+      await writeCurrentDatabaseBuffer(body);
+      return databaseVersion(body);
+    })
+      .then((newVersion) => send(res, 204, "", { "X-Database-Version": newVersion }))
       .catch((error) => {
         console.error(error);
-        send(res, 500, "save failed");
+        send(res, error.status || 500, error.message || "save failed", error.currentVersion ? { "X-Database-Version": error.currentVersion } : {});
       });
   });
 

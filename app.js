@@ -4,6 +4,7 @@ const SQL_WASM = "https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/";
 const state = {
   db: null,
   sort: {},
+  databaseVersion: "",
   analysisMonths: 6,
   customerSearchMonths: 6,
   supplierMonths: 6,
@@ -1192,6 +1193,7 @@ async function readServerDatabase() {
   try {
     const response = await fetch("/api/db", { cache: "no-store" });
     if (!response.ok) return null;
+    state.databaseVersion = response.headers.get("X-Database-Version") || "";
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     console.warn("לא ניתן לטעון בסיס נתונים מהשרת", error);
@@ -1235,12 +1237,22 @@ function writeBrowserDatabase(data) {
 
 async function writeServerDatabase(data) {
   try {
+    const headers = { "Content-Type": "application/octet-stream" };
+    if (state.databaseVersion) headers["If-Match"] = state.databaseVersion;
     const response = await fetch("/api/db", {
       method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
+      headers,
       body: data,
     });
-    if (response.ok) return { ok: true };
+    const nextVersion = response.headers.get("X-Database-Version") || "";
+    if (response.ok) {
+      if (nextVersion) state.databaseVersion = nextVersion;
+      return { ok: true };
+    }
+    if (response.status === 409) {
+      if (nextVersion) state.databaseVersion = nextVersion;
+      return { ok: false, conflict: true, error: "הנתונים בשרת השתנו. צריך לרענן לפני שמירה כדי לא לדרוס עבודה ממחשב אחר." };
+    }
     return { ok: false, error: await response.text() };
   } catch (error) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
