@@ -594,8 +594,10 @@ async function handlePostgresProductsImport(payload, res) {
 
   if (rows.length) {
     const existingSettings = await existingPostgresProductSettings(rows.map((row) => row.sku));
+    const existingImages = await existingPostgresProductImages(rows.map((row) => row.sku));
     rows.forEach((row) => {
       const saved = existingSettings.get(String(row.sku || "")) || {};
+      row.image_url = row.image_url || existingImages.get(String(row.sku || "")) || "";
       row.sale_price = numberValue(saved.sale_price) > 0 ? numberValue(saved.sale_price) : row.sale_price;
       row.promo_discount_percent = numberValue(saved.promo_discount_percent) > 0 ? numberValue(saved.promo_discount_percent) : row.promo_discount_percent;
       row.hidden = numberValue(saved.hidden) ? 1 : row.hidden;
@@ -636,6 +638,25 @@ async function upsertProductRowsWithColumnFallback(rows) {
       });
     }
   }
+}
+
+async function existingPostgresProductImages(skus) {
+  const images = new Map();
+  for (let index = 0; index < skus.length; index += 150) {
+    const chunkSkus = skus.slice(index, index + 150).map((sku) => String(sku || "").trim()).filter(Boolean);
+    if (!chunkSkus.length) continue;
+    const chunk = chunkSkus.map((sku) => `"${sku.replaceAll('"', '\\"')}"`).join(",");
+    try {
+      const rows = await postgresRows(`products?select=sku,image_url&sku=in.(${chunk})&limit=1000`);
+      rows.forEach((row) => {
+        const imageUrl = String(row.image_url || "").trim();
+        if (imageUrl) images.set(String(row.sku), imageUrl);
+      });
+    } catch (error) {
+      if (!/image_url|schema cache|column/i.test(error.message || "")) throw error;
+    }
+  }
+  return images;
 }
 
 async function handlePostgresProductSettings(payload, res) {

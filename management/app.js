@@ -155,7 +155,7 @@ const salesColumns = {
 const productColumns = {
   sku: ['מק"ט', "מקט"],
   barcode: ["ברקוד", "בר קוד", "קוד ברקוד", "ברקוד מוצר", "ברקוד פריט", "barcode", "bar code", "Barcode", "BARCODE", "EAN", "ean", "EAN13", "EAN-13", "UPC", "GTIN"],
-  image_url: ["תמונה", "קישור תמונה", "קישור לתמונה", "כתובת תמונה", "image_url", "image", "Image"],
+  image_url: ["תמונה", "תמונת מוצר", "קישור תמונה", "קישור לתמונה", "קישור לתמונת מוצר", "כתובת תמונה", "לינק תמונה", "לינק לתמונה", "URL תמונה", "image_url", "image", "Image"],
   description: ["תאור", "תיאור", "תאור מוצר", "תיאור מוצר"],
   category: ["תאור משפחה", "תיאור משפחה", "קטגוריה"],
   standard_cost: ['עלות תקן ש"ח', "עלות תקן"],
@@ -909,6 +909,7 @@ function importProductRows(rows) {
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "sale_price", "REAL DEFAULT 0");
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  const existingImages = new Map(queryRows("SELECT sku, image_url FROM products WHERE COALESCE(TRIM(image_url), '') <> ''").map((row) => [text(row.sku), text(row.image_url)]));
   const existingProductSettings = productCustomerSettingsMap();
   const stmt = state.db.prepare(`
     INSERT INTO products
@@ -937,7 +938,7 @@ function importProductRows(rows) {
     const product = {
       sku: text(mapped.sku),
       barcode: barcodeValue(mapped.barcode || inferBarcode(row)),
-      image_url: text(mapped.image_url),
+      image_url: text(mapped.image_url) || existingImages.get(text(mapped.sku)) || "",
       description: text(mapped.description),
       category: text(mapped.category),
       standard_cost: number(mapped.standard_cost),
