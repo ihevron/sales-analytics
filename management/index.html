@@ -232,6 +232,15 @@
           <div class="panel">
             <div class="toolbar">
               <input id="history-query" type="search" placeholder="חיפוש לפי לקוח או מספר הזמנה" />
+              <select id="history-status-filter" aria-label="סינון לפי סטטוס הזמנה">
+                <option value="all">כל הסטטוסים</option>
+                <option value="unhandled">טרם טופל</option>
+                <option value="not-picked">לא לוקט</option>
+                <option value="picked">לוקט</option>
+                <option value="invoice">חשבונית הודפסה</option>
+                <option value="no-invoice">ללא חשבונית</option>
+                <option value="shipping">מוכן למשלוח</option>
+              </select>
             </div>
             <div class="process-tabs" id="process-tabs">
               <button class="active" data-process-tab="orders">הזמנות פעילות</button>

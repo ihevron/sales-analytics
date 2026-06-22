@@ -77,6 +77,7 @@ const state = {
   selectedProcessOrders: new Set(),
   selectedMissedOrders: new Set(),
   processTab: "orders",
+  processStatusFilter: "all",
   invoiceRows: [],
   invoiceProductIndex: null,
   manualInvoiceProduct: null,
@@ -702,6 +703,11 @@ function bindEvents() {
   document.getElementById("order-save").addEventListener("click", saveOrder);
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
+  document.getElementById("history-status-filter").addEventListener("change", (event) => {
+    state.processStatusFilter = event.target.value || "all";
+    state.selectedProcessOrders.clear();
+    renderOrderHistory();
+  });
   document.getElementById("export-selected-priority").addEventListener("click", exportSelectedPriorityOrders);
   document.getElementById("mark-selected-picked").addEventListener("click", markSelectedProcessOrdersPicked);
   document.getElementById("mark-selected-invoices-printed").addEventListener("click", markSelectedPickedOrdersInvoicesPrinted);
@@ -3474,9 +3480,11 @@ async function renderOrderHistory() {
   normalizeClosedOrderStatuses();
   await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
+  const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "all";
+  state.processStatusFilter = statusFilter;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
-  const processRows = queryRows(`
+  const processRows = filterProcessRows(queryRows(`
     SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status IN (?, 'picked', ?)
@@ -3491,7 +3499,7 @@ async function renderOrderHistory() {
       END,
       id DESC
     LIMIT 700
-  `, [ORDER_STATUSES[0], ORDER_STATUSES[2], query, query, query, ORDER_STATUSES[0], ORDER_STATUSES[2]]);
+  `, [ORDER_STATUSES[0], ORDER_STATUSES[2], query, query, query, ORDER_STATUSES[0], ORDER_STATUSES[2]]), statusFilter);
   renderTable("process-orders-table", processRows, [
     { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
@@ -3507,13 +3515,13 @@ async function renderOrderHistory() {
       <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "processOrders", "id", "desc");
-  const pendingRows = queryRows(`
-    SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit
+  const pendingRows = filterProcessRows(queryRows(`
+    SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status = ? AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
-  `, [ORDER_STATUSES[0], query, query, query]);
+  `, [ORDER_STATUSES[0], query, query, query]), statusFilter);
   renderTable("process-pending-table", pendingRows, [
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
     { key: "order_date", label: "תאריך" },
@@ -3528,13 +3536,13 @@ async function renderOrderHistory() {
     ` },
   ], "processPending", "id", "desc");
 
-  const pickedRows = queryRows(`
-    SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit, invoice_printed
+  const pickedRows = filterProcessRows(queryRows(`
+    SELECT id, order_date, customer_no, customer_name, status, estimated_total, estimated_profit, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status = 'picked' AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
-  `, [query, query, query]);
+  `, [query, query, query]), statusFilter);
   renderTable("history-table", pickedRows, [
     { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
@@ -3554,13 +3562,13 @@ async function renderOrderHistory() {
   document.querySelectorAll("[data-export-order]").forEach((button) => button.addEventListener("click", () => exportSavedOrder(button.dataset.exportOrder)));
   document.querySelectorAll("[data-invoice-printed]").forEach((input) => input.addEventListener("change", () => markInvoicePrinted(input.dataset.invoicePrinted)));
 
-  const shippingRows = queryRows(`
-    SELECT id, order_date, customer_no, customer_name, status, estimated_total
+  const shippingRows = filterProcessRows(queryRows(`
+    SELECT id, order_date, customer_no, customer_name, status, estimated_total, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status = 'מוכן למשלוח' AND COALESCE(process_hidden, 0) = 0 AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
-  `, [query, query, query]);
+  `, [query, query, query]), statusFilter);
   renderTable("shipping-table", shippingRows, [
     { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
@@ -3585,6 +3593,25 @@ async function renderOrderHistory() {
   bindProcessOrderSelection();
   const missedCount = renderMissedOrders(query);
   updateProcessTabCounts({ orders: processRows.length, pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, missed: missedCount });
+}
+
+function filterProcessRows(rows, filter) {
+  const value = filter || "all";
+  if (value === "all") return rows;
+  return rows.filter((row) => processRowMatchesFilter(row, value));
+}
+
+function processRowMatchesFilter(row, filter) {
+  const status = String(row.status || "");
+  const isPicked = status !== ORDER_STATUSES[0];
+  const hasInvoice = Boolean(number(row.invoice_printed)) || status === ORDER_STATUSES[2] || Boolean(row.shipped_at);
+  if (filter === "unhandled") return status === ORDER_STATUSES[0] && !hasInvoice;
+  if (filter === "not-picked") return !isPicked;
+  if (filter === "picked") return isPicked;
+  if (filter === "invoice") return hasInvoice;
+  if (filter === "no-invoice") return !hasInvoice;
+  if (filter === "shipping") return status === ORDER_STATUSES[2] && !row.shipped_at;
+  return true;
 }
 
 function processStageCheckbox(row, stage) {
@@ -4087,15 +4114,15 @@ function exportSelectedPriorityOrders() {
 
 function selectAllPickedProcessOrders() {
   const query = `%${document.getElementById("history-query").value.trim()}%`;
-  const rows = queryRows(`
-    SELECT id
+  const rows = filterProcessRows(queryRows(`
+    SELECT id, status, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status IN (?, 'picked', ?)
       AND COALESCE(process_hidden, 0) = 0
       AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
-  `, [ORDER_STATUSES[0], ORDER_STATUSES[2], query, query, query]);
+  `, [ORDER_STATUSES[0], ORDER_STATUSES[2], query, query, query]), state.processStatusFilter);
   rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
   renderOrderHistory();
 }
@@ -4143,15 +4170,15 @@ async function markSelectedPickedOrdersInvoicesPrinted() {
 
 function selectAllShippingProcessOrders() {
   const query = `%${document.getElementById("history-query").value.trim()}%`;
-  const rows = queryRows(`
-    SELECT id
+  const rows = filterProcessRows(queryRows(`
+    SELECT id, status, invoice_printed, shipped_at
     FROM customer_orders
     WHERE status = 'מוכן למשלוח'
       AND COALESCE(process_hidden, 0) = 0
       AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
     ORDER BY id DESC
     LIMIT 500
-  `, [query, query, query]);
+  `, [query, query, query]), state.processStatusFilter);
   rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
   renderOrderHistory();
 }
