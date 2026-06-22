@@ -77,7 +77,7 @@ const state = {
   selectedProcessOrders: new Set(),
   selectedMissedOrders: new Set(),
   processTab: "orders",
-  processStatusFilter: "all",
+  processStatusFilter: "unhandled",
   invoiceRows: [],
   invoiceProductIndex: null,
   manualInvoiceProduct: null,
@@ -704,7 +704,7 @@ function bindEvents() {
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
   document.getElementById("history-status-filter").addEventListener("change", (event) => {
-    state.processStatusFilter = event.target.value || "all";
+    state.processStatusFilter = event.target.value || "unhandled";
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
@@ -3480,7 +3480,7 @@ async function renderOrderHistory() {
   normalizeClosedOrderStatuses();
   await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
-  const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "all";
+  const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "unhandled";
   state.processStatusFilter = statusFilter;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
@@ -3596,8 +3596,7 @@ async function renderOrderHistory() {
 }
 
 function filterProcessRows(rows, filter) {
-  const value = filter || "all";
-  if (value === "all") return rows;
+  const value = filter || "unhandled";
   return rows.filter((row) => processRowMatchesFilter(row, value));
 }
 
@@ -3605,13 +3604,11 @@ function processRowMatchesFilter(row, filter) {
   const status = String(row.status || "");
   const isPicked = status !== ORDER_STATUSES[0];
   const hasInvoice = Boolean(number(row.invoice_printed)) || status === ORDER_STATUSES[2] || Boolean(row.shipped_at);
-  if (filter === "unhandled") return status === ORDER_STATUSES[0] && !hasInvoice;
-  if (filter === "not-picked") return !isPicked;
-  if (filter === "picked") return isPicked;
-  if (filter === "invoice") return hasInvoice;
-  if (filter === "no-invoice") return !hasInvoice;
-  if (filter === "shipping") return status === ORDER_STATUSES[2] && !row.shipped_at;
-  return true;
+  const isShipped = Boolean(row.shipped_at);
+  if (filter === "unhandled") return !isPicked && !hasInvoice && !isShipped;
+  if (filter === "picked-waiting-invoice") return isPicked && !hasInvoice && !isShipped;
+  if (filter === "waiting-shipping") return isPicked && hasInvoice && !isShipped;
+  return !isPicked && !hasInvoice && !isShipped;
 }
 
 function processStageCheckbox(row, stage) {
