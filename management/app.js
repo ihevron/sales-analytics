@@ -46,6 +46,7 @@ const state = {
   productsSource: "sqlite",
   callsSource: "sqlite",
   postgresCallRows: [],
+  forceSqliteCallsUntil: 0,
   sort: {},
   dashboardMonths: 6,
   analysisMonths: 6,
@@ -1064,7 +1065,8 @@ async function importCallCustomersFile(event) {
     const sheets = await readWorkbookAllSheets(file);
     const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false, forceFixedColumns: true });
     const imported = importedProfiles.length;
-    await importCallCustomerProfilesToPostgres(importedProfiles);
+    const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
+    if (!mirror.ok) state.forceSqliteCallsUntil = Date.now() + 10 * 60 * 1000;
     await persistDatabase();
     await renderCalls();
     document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות (${callProfileDaySummary(importedProfiles)})`;
@@ -1085,7 +1087,8 @@ async function importCustomerAppCustomersFile(event) {
     status.textContent = "קורא קובץ לקוחות...";
     const sheets = await readWorkbookAllSheets(file);
     const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false, forceFixedColumns: true });
-    await importCallCustomerProfilesToPostgres(importedProfiles);
+    const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
+    if (!mirror.ok) state.forceSqliteCallsUntil = Date.now() + 10 * 60 * 1000;
     await persistDatabase();
     state.postgresCallRows = [];
     await renderCalls();
@@ -1182,7 +1185,8 @@ async function importCallCustomerProfilesToPostgres(profiles) {
   const data = await response.json().catch(() => ({}));
   if (data.configured === false) return data;
   if (!response.ok || !data.ok) {
-    throw new Error(data.error || "ייבוא הלקוחות ל-Supabase נכשל");
+    console.warn("Postgres customer profiles import failed", data.error || response.status);
+    return { ok: false, error: data.error || "customer profiles mirror failed" };
   }
   return data;
 }
@@ -4485,7 +4489,7 @@ async function renderCalls() {
   renderCallDayTabs();
   const day = state.callsDay;
   const callDate = callDateForDay(day);
-  if (await renderCallsFromPostgres(day, callDate)) return;
+  if (Date.now() > state.forceSqliteCallsUntil && await renderCallsFromPostgres(day, callDate)) return;
   state.callsSource = "sqlite";
   state.postgresCallRows = [];
   const rows = queryRows(`
