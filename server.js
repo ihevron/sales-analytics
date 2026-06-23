@@ -794,9 +794,8 @@ async function handlePostgresCalls(req, res) {
     return;
   }
 
-  const encodedDay = encodeURIComponent(day);
   const [profiles, calls] = await Promise.all([
-    postgresRows(`customer_call_profiles?select=customer_no,customer_name,phone,address,call_days,source&source=eq.calls&call_days=ilike.*${encodedDay}*&order=customer_name.asc&limit=1000`),
+    postgresCallProfilesForDay(day),
     postgresRows(`customer_calls?select=id,call_date,customer_no,customer_name,status,call_again_time,whatsapp_sent_at,manual_order_id,notes,updated_at&call_date=eq.${encodeURIComponent(callDate)}&limit=2000`),
   ]);
   const callByCustomer = new Map(calls.map((row) => [String(row.customer_no), row]));
@@ -892,14 +891,12 @@ async function handlePostgresCallProfile(payload, res) {
     source: "calls",
     updated_at: new Date().toISOString(),
   };
-  await postgresRest(`customer_call_profiles?customer_no=eq.${encodeURIComponent(customerNo)}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify(row),
-  });
+  await postgresPatchWithColumnFallback(
+    "customer_call_profiles",
+    `customer_no=eq.${encodeURIComponent(customerNo)}`,
+    row,
+    ["phone", "address", "call_days", "source", "updated_at"],
+  );
   sendJson(res, 200, { ok: true, source: "postgres" });
 }
 
@@ -957,16 +954,28 @@ async function handlePostgresCallProfilesImport(payload, res) {
         headers: { Prefer: "return=minimal" },
       });
     }
-    await postgresRest("customer_call_profiles?source=eq.calls", {
-      method: "DELETE",
-      headers: { Prefer: "return=minimal" },
-    });
     try {
-      await postgresUpsert("customer_call_profiles", rows, "customer_no");
+      await postgresRest("customer_call_profiles?source=eq.calls", {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
     } catch (error) {
-      if (!/company_id|terms_accepted_at|terms_version_accepted|customer_type|schema cache|column/i.test(error.message || "")) throw error;
-      await postgresUpsert("customer_call_profiles", rows.map(({ company_id, terms_accepted_at, terms_version_accepted, customer_type, ...row }) => row), "customer_no");
+      if (!/source|schema cache|column/i.test(error.message || "")) throw error;
     }
+    await postgresUpsertWithColumnFallback("customer_call_profiles", rows, "customer_no", [
+      "contact",
+      "phone",
+      "phone2",
+      "city",
+      "address",
+      "company_id",
+      "terms_accepted_at",
+      "terms_version_accepted",
+      "customer_type",
+      "call_days",
+      "source",
+      "updated_at",
+    ]);
   }
   sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
 }
@@ -1011,7 +1020,14 @@ async function handlePostgresOrderPatch(payload, res) {
   let postgresResult = { ok: true, skipped: true };
   if (usePostgresPreview) {
     try {
-      await postgresPatch("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row);
+      await postgresPatchWithColumnFallback("customer_orders", `id=eq.${encodeURIComponent(orderId)}`, row, [
+        "invoice_printed",
+        "shipped_at",
+        "process_hidden",
+        "picked_by",
+        "picked_at",
+        "updated_at",
+      ]);
       postgresResult = { ok: true, skipped: false };
     } catch (error) {
       if (!/customer_orders|schema cache|relation|does not exist|PGRST/i.test(error.message || "")) throw error;
@@ -1481,6 +1497,78 @@ async function postgresPatch(table, filter, row) {
     body: JSON.stringify(row),
   });
   return { ok: true };
+}
+
+function missingPostgresColumn(error) {
+  const message = String(error?.message || "");
+  return message.match(/Could not find the '([^']+)' column/i)?.[1]
+    || message.match(/column [^.]+\."?([^"\s]+)"? does not exist/i)?.[1]
+    || "";
+}
+
+function omitColumns(row, columns) {
+  const omitted = new Set(columns);
+  return Object.fromEntries(Object.entries(row).filter(([key]) => !omitted.has(key)));
+}
+
+async function postgresUpsertWithColumnFallback(table, rows, conflictKey, optionalColumns = []) {
+  const omitted = new Set();
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt += 1) {
+    const safeRows = omitted.size ? rows.map((row) => omitColumns(row, omitted)) : rows;
+    try {
+      return await postgresUpsert(table, safeRows, conflictKey);
+    } catch (error) {
+      const missing = missingPostgresColumn(error);
+      if (!missing || !optionalColumns.includes(missing) || omitted.has(missing)) throw error;
+      omitted.add(missing);
+      console.warn(`postgres upsert ${table} retrying without missing column ${missing}`);
+    }
+  }
+  throw new Error(`postgres upsert ${table} failed after column fallback`);
+}
+
+async function postgresPatchWithColumnFallback(table, filter, row, optionalColumns = []) {
+  const omitted = new Set();
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt += 1) {
+    const safeRow = omitted.size ? omitColumns(row, omitted) : row;
+    if (!Object.keys(safeRow).length) return { ok: true, skipped: true, omitted: [...omitted] };
+    try {
+      return await postgresPatch(table, filter, safeRow);
+    } catch (error) {
+      const missing = missingPostgresColumn(error);
+      if (!missing || !optionalColumns.includes(missing) || omitted.has(missing)) throw error;
+      omitted.add(missing);
+      console.warn(`postgres patch ${table} retrying without missing column ${missing}`);
+    }
+  }
+  throw new Error(`postgres patch ${table} failed after column fallback`);
+}
+
+async function postgresCallProfilesForDay(day) {
+  const columns = new Set(["customer_no", "customer_name", "phone", "address", "call_days", "source"]);
+  const optionalColumns = [...columns].filter((column) => column !== "customer_no" && column !== "customer_name");
+  const encodedDay = encodeURIComponent(day);
+  for (let attempt = 0; attempt <= optionalColumns.length; attempt += 1) {
+    const select = [...columns].join(",");
+    const filters = [];
+    if (columns.has("source")) filters.push("source=eq.calls");
+    if (columns.has("call_days")) filters.push(`call_days=ilike.*${encodedDay}*`);
+    const path = `customer_call_profiles?select=${select}${filters.length ? `&${filters.join("&")}` : ""}&order=customer_name.asc&limit=1000`;
+    try {
+      const rows = await postgresRows(path);
+      return rows.filter((row) => {
+        const matchesSource = !columns.has("source") || !row.source || String(row.source) === "calls";
+        const matchesDay = !columns.has("call_days") || !row.call_days || String(row.call_days).includes(day);
+        return matchesSource && matchesDay;
+      });
+    } catch (error) {
+      const missing = missingPostgresColumn(error);
+      if (!missing || !columns.has(missing) || missing === "customer_no" || missing === "customer_name") throw error;
+      columns.delete(missing);
+      console.warn(`postgres call profiles retrying without missing column ${missing}`);
+    }
+  }
+  throw new Error("postgres call profiles failed after column fallback");
 }
 
 function normalizePostgresOrder(row) {

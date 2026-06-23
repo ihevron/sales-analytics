@@ -1206,24 +1206,36 @@ textarea { resize: vertical; }
   background: #fff;
 }
 
-.call-detail-actions button:first-child {
+.call-inline-actions button[data-call-status="ordered"],
+.call-detail-actions button[data-call-status="ordered"] {
   background: #dcfce7;
   border-color: #86efac;
   color: #166534;
 }
 
-.call-detail-actions button:nth-child(2) {
+.call-inline-actions button[data-call-status="pending"],
+.call-detail-actions button[data-call-status="pending"] {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.call-inline-actions button[data-call-status="no_need"],
+.call-detail-actions button[data-call-status="no_need"] {
   background: #fee2e2;
-  border-color: #fecaca;
+  border-color: #fca5a5;
   color: #991b1b;
 }
 
-.call-detail-actions button:nth-child(3) {
+.call-inline-actions button[data-call-status="no_answer"],
+.call-detail-actions button[data-call-status="no_answer"] {
   background: #f1f5f9;
+  border-color: #cbd5e1;
   color: #334155;
 }
 
-.call-detail-actions button:nth-child(4) {
+.call-inline-actions button[data-call-status="call_again"],
+.call-detail-actions button[data-call-status="call_again"] {
   background: #dbeafe;
   border-color: #bfdbfe;
   color: #1d4ed8;
@@ -2092,15 +2104,15 @@ td small {
 
 .call-row.status-ordered { border-right-color: #16a34a; }
 .call-row.status-pending { border-right-color: #f59e0b; }
-.call-row.status-call-again { border-right-color: #f59e0b; }
-.call-row.status-no-answer { border-right-color: #ef4444; }
-.call-row.status-no-need { border-right-color: #94a3b8; }
+.call-row.status-call-again { border-right-color: #2563eb; }
+.call-row.status-no-answer { border-right-color: #64748b; }
+.call-row.status-no-need { border-right-color: #dc2626; }
 
 .call-status-pill.ordered { background: #dcfce7; color: #166534; }
-.call-status-pill.pending,
-.call-status-pill.call-again { background: #fef3c7; color: #92400e; }
-.call-status-pill.no-answer { background: #fee2e2; color: #991b1b; }
-.call-status-pill.no-need { background: #f1f5f9; color: #475569; }
+.call-status-pill.pending { background: #fef3c7; color: #92400e; }
+.call-status-pill.call-again { background: #dbeafe; color: #1d4ed8; }
+.call-status-pill.no-answer { background: #e2e8f0; color: #334155; }
+.call-status-pill.no-need { background: #fee2e2; color: #991b1b; }
 
 .bottom-nav {
   display: none;

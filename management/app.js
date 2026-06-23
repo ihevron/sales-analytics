@@ -77,7 +77,7 @@ const state = {
   selectedProcessOrders: new Set(),
   selectedMissedOrders: new Set(),
   processTab: "orders",
-  processStatusFilter: "unhandled",
+  processStatusFilter: "all",
   invoiceRows: [],
   invoiceProductIndex: null,
   manualInvoiceProduct: null,
@@ -704,7 +704,7 @@ function bindEvents() {
   document.getElementById("order-reset").addEventListener("click", resetOrder);
   document.getElementById("history-query").addEventListener("input", debounce(renderOrderHistory, 250));
   document.getElementById("history-status-filter").addEventListener("change", (event) => {
-    state.processStatusFilter = event.target.value || "unhandled";
+    state.processStatusFilter = event.target.value || "all";
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
@@ -3480,7 +3480,7 @@ async function renderOrderHistory() {
   normalizeClosedOrderStatuses();
   await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
-  const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "unhandled";
+  const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "all";
   state.processStatusFilter = statusFilter;
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.classList.toggle("active", button.dataset.processTab === state.processTab));
   document.querySelectorAll("[data-process-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.processPane === state.processTab));
@@ -3596,7 +3596,8 @@ async function renderOrderHistory() {
 }
 
 function filterProcessRows(rows, filter) {
-  const value = filter || "unhandled";
+  const value = filter || "all";
+  if (value === "all") return rows;
   return rows.filter((row) => processRowMatchesFilter(row, value));
 }
 
@@ -3608,7 +3609,7 @@ function processRowMatchesFilter(row, filter) {
   if (filter === "unhandled") return !isPicked && !hasInvoice && !isShipped;
   if (filter === "picked-waiting-invoice") return isPicked && !hasInvoice && !isShipped;
   if (filter === "waiting-shipping") return isPicked && hasInvoice && !isShipped;
-  return !isPicked && !hasInvoice && !isShipped;
+  return true;
 }
 
 function processStageCheckbox(row, stage) {
