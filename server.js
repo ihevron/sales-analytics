@@ -1044,6 +1044,59 @@ async function handlePostgresOrderPatch(payload, res) {
   sendJson(res, 200, { ok: true, source: "sqlite+postgres", sqlite: sqliteResult, postgres: postgresResult });
 }
 
+async function handleOrdersBatchPatch(payload, res) {
+  const orderIds = [...new Set((Array.isArray(payload.order_ids) ? payload.order_ids : []).map(numberValue).filter(Boolean))];
+  if (!orderIds.length) {
+    sendJson(res, 400, { ok: false, error: "order_ids are required" });
+    return;
+  }
+  const allowed = new Set(["status", "invoice_printed", "shipped_at", "process_hidden", "picked_by", "picked_at", "updated_at"]);
+  const row = {};
+  Object.entries(payload.values || {}).forEach(([key, value]) => {
+    if (!allowed.has(key)) return;
+    if (key === "invoice_printed" || key === "process_hidden") {
+      row[key] = value === true || value === 1 || value === "1" ? 1 : 0;
+      return;
+    }
+    row[key] = value;
+  });
+  row.updated_at = row.updated_at || new Date().toISOString();
+  const keys = Object.keys(row);
+  if (!keys.length) {
+    sendJson(res, 400, { ok: false, error: "no allowed values supplied" });
+    return;
+  }
+
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    ensureServerColumn(db, "customer_orders", "invoice_printed", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "customer_orders", "shipped_at", "TEXT");
+    ensureServerColumn(db, "customer_orders", "process_hidden", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "customer_orders", "picked_by", "TEXT");
+    ensureServerColumn(db, "customer_orders", "picked_at", "TEXT");
+    ensureServerColumn(db, "customer_orders", "updated_at", "TEXT");
+    const assignments = keys.map((key) => `${key} = ?`).join(", ");
+    db.run("BEGIN TRANSACTION");
+    orderIds.forEach((orderId) => {
+      db.run(`UPDATE customer_orders SET ${assignments} WHERE id = ?`, [...keys.map((key) => row[key]), orderId]);
+    });
+    db.run("COMMIT");
+    await writeCurrentDatabaseBuffer(Buffer.from(db.export()));
+  } catch (error) {
+    try {
+      db.run("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+
+  const postgresResult = await mirrorOrderBatchPatchToPostgres(orderIds, row);
+  sendJson(res, 200, { ok: true, updated: orderIds.length, postgres: postgresResult });
+}
+
 async function patchSqliteOrder(orderId, values) {
   const keys = Object.keys(values || {});
   if (!keys.length) return { ok: true, skipped: true };
@@ -1408,6 +1461,12 @@ async function handlePickingChanges(payload, res) {
           WHERE id = ?
         `, [numberValue(change.pickedQuantity), numberValue(change.itemId)]);
       }
+      if (type === "itemShortageDismissed") {
+        db.run("UPDATE customer_order_items SET shortage_dismissed = ? WHERE id = ?", [
+          change.shortageDismissed === false ? 0 : 1,
+          numberValue(change.itemId),
+        ]);
+      }
       if (type === "productUnits") {
         db.run("UPDATE customer_order_items SET units_per_carton = ? WHERE id = ?", [numberValue(change.unitsPerCarton) || 1, numberValue(change.itemId)]);
         if (change.sku) {
@@ -1660,6 +1719,11 @@ async function mirrorPickingChangesToPostgres(changes) {
           shortage_dismissed: false,
         });
       }
+      if (type === "itemShortageDismissed") {
+        await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
+          shortage_dismissed: change.shortageDismissed === false ? false : true,
+        });
+      }
       if (type === "productUnits") {
         await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
           units_per_carton: numberValue(change.unitsPerCarton) || 1,
@@ -1684,6 +1748,30 @@ async function mirrorPickingChangesToPostgres(changes) {
   } catch (error) {
     console.error("postgres picking mirror failed", error);
     return { ok: false, error: error.message || "postgres picking mirror failed" };
+  }
+}
+
+async function mirrorOrderBatchPatchToPostgres(orderIds, row) {
+  if (!usePostgresPreview) return { ok: true, skipped: true };
+  try {
+    const postgresRow = { ...row };
+    if ("invoice_printed" in postgresRow) postgresRow.invoice_printed = numberValue(postgresRow.invoice_printed) ? 1 : 0;
+    if ("process_hidden" in postgresRow) postgresRow.process_hidden = numberValue(postgresRow.process_hidden) ? 1 : 0;
+    for (let index = 0; index < orderIds.length; index += 80) {
+      const chunk = orderIds.slice(index, index + 80).join(",");
+      await postgresPatchWithColumnFallback("customer_orders", `id=in.(${chunk})`, postgresRow, [
+        "invoice_printed",
+        "shipped_at",
+        "process_hidden",
+        "picked_by",
+        "picked_at",
+        "updated_at",
+      ]);
+    }
+    return { ok: true, updated: orderIds.length };
+  } catch (error) {
+    console.error("postgres order batch mirror failed", error);
+    return { ok: false, error: error.message || "postgres order batch mirror failed" };
   }
 }
 
@@ -2433,6 +2521,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/order-delta" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrderDelta(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/orders-batch-patch" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrdersBatchPatch(payload, res)));
     return;
   }
 

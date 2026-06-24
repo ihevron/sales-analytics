@@ -47,6 +47,7 @@ const state = {
   callsSource: "sqlite",
   postgresCallRows: [],
   forceSqliteCallsUntil: 0,
+  forceSqliteOrderHistoryUntil: 0,
   sort: {},
   dashboardMonths: 6,
   analysisMonths: 6,
@@ -722,7 +723,7 @@ function bindEvents() {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
-  document.getElementById("mark-selected-shipped").addEventListener("click", markSelectedProcessOrdersShipped);
+  document.getElementById("mark-selected-shipped").addEventListener("click", markSelectedProcessOrdersShippedBatch);
   document.getElementById("hide-selected-shipping-orders").addEventListener("click", hideSelectedShippingOrders);
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
     state.processTab = button.dataset.processTab;
@@ -2846,7 +2847,7 @@ function comparePriorityExportItems(a, b) {
 
 async function renderPicking() {
   normalizeClosedOrderStatuses();
-  if (!state.pendingPickingChanges.length && !state.serverSaveInProgress) await syncOrderHistoryFromPostgres();
+  if (!state.pendingPickingChanges.length && !state.serverSaveInProgress && Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
   document.querySelectorAll("[data-picking-mode]").forEach((button) => button.classList.toggle("active", button.dataset.pickingMode === state.pickingMode));
   document.getElementById("product-picking-controls").classList.toggle("hidden", state.pickingMode !== "product");
   if (state.pickingMode === "product") {
@@ -3411,6 +3412,7 @@ async function manualCompletePickingOrder(orderId) {
 }
 
 async function syncOrderHistoryFromPostgres() {
+  if (Date.now() <= state.forceSqliteOrderHistoryUntil) return false;
   try {
     const rawQuery = document.getElementById("history-query")?.value?.trim() || "";
     const params = new URLSearchParams({ q: rawQuery });
@@ -3482,7 +3484,7 @@ async function syncOrderHistoryFromPostgres() {
 
 async function renderOrderHistory() {
   normalizeClosedOrderStatuses();
-  await syncOrderHistoryFromPostgres();
+  if (Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "all";
   state.processStatusFilter = statusFilter;
@@ -3732,8 +3734,8 @@ function renderMissedOrders(query) {
     renderMissedOrders(query);
   }));
   document.querySelectorAll("[data-export-all-missed-word]").forEach((button) => button.addEventListener("click", () => exportAllMissedOrdersWord(query)));
-  document.querySelectorAll("[data-delete-missed]").forEach((button) => button.addEventListener("click", () => deleteMissedOrder(button.dataset.deleteMissed)));
-  document.querySelectorAll("[data-delete-selected-missed]").forEach((button) => button.addEventListener("click", deleteSelectedMissedOrders));
+  document.querySelectorAll("[data-delete-missed]").forEach((button) => button.addEventListener("click", () => dismissMissedOrderDelta(button.dataset.deleteMissed)));
+  document.querySelectorAll("[data-delete-selected-missed]").forEach((button) => button.addEventListener("click", dismissSelectedMissedOrdersDelta));
   return grouped.size;
 }
 
@@ -3782,6 +3784,46 @@ async function deleteMissedOrder(orderId) {
   `, [orderId]);
   await persistDatabase();
   renderOrderHistory();
+}
+
+async function dismissSelectedMissedOrdersDelta() {
+  const ids = [...state.selectedMissedOrders];
+  if (!ids.length) return;
+  if (!confirm(`למחוק ${integer(ids.length)} הזמנות חוסרים?`)) return;
+  const itemIds = ids.flatMap((orderId) => missedItemIdsForOrder(orderId));
+  dismissMissedItemsLocally(itemIds);
+  itemIds.forEach((itemId) => queuePickingChange({ type: "itemShortageDismissed", itemId, shortageDismissed: true }));
+  state.selectedMissedOrders.clear();
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  await savePickingNow({ silent: true });
+  renderOrderHistory();
+}
+
+async function dismissMissedOrderDelta(orderId) {
+  if (!confirm("למחוק את הזמנת החוסרים?")) return;
+  const itemIds = missedItemIdsForOrder(orderId);
+  dismissMissedItemsLocally(itemIds);
+  itemIds.forEach((itemId) => queuePickingChange({ type: "itemShortageDismissed", itemId, shortageDismissed: true }));
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  await savePickingNow({ silent: true });
+  renderOrderHistory();
+}
+
+function missedItemIdsForOrder(orderId) {
+  return queryRows(`
+    SELECT id
+    FROM customer_order_items
+    WHERE order_id = ? AND COALESCE(shortage_dismissed, 0) = 0 AND (
+      COALESCE(item_status, 'pending') = 'missing'
+      OR (COALESCE(item_status, 'pending') IN ('picked', 'substituted') AND COALESCE(picked_quantity, 0) < COALESCE(quantity, 0))
+    )
+  `, [orderId]).map((row) => row.id);
+}
+
+function dismissMissedItemsLocally(itemIds) {
+  if (!itemIds.length) return;
+  const placeholders = itemIds.map(() => "?").join(",");
+  state.db.run(`UPDATE customer_order_items SET shortage_dismissed = 1 WHERE id IN (${placeholders})`, itemIds);
 }
 
 function missedItemsForOrder(orderId) {
@@ -4241,6 +4283,24 @@ async function markSelectedProcessOrdersShipped() {
   renderOrderHistory();
 }
 
+async function markSelectedProcessOrdersShippedBatch() {
+  const ids = selectedActiveProcessOrderIds();
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת.");
+  if (!confirm(`לסמן ${integer(ids.length)} הזמנות כנשלחו?`)) return;
+  const now = new Date().toISOString();
+  state.db.run("BEGIN TRANSACTION");
+  ids.forEach((orderId) => {
+    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", ["נשלחה", now, now, orderId]);
+  });
+  state.db.run("COMMIT");
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
+  renderOrderHistory();
+}
+
 async function hideSelectedShippingOrders() {
   const ids = selectedShippingOrderIds();
   if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית מוכן למשלוח.");
@@ -4269,6 +4329,21 @@ async function patchPostgresOrder(orderId, values) {
     return { ok: response.ok && data.ok !== false, error: data.error || "" };
   } catch (error) {
     console.warn("Postgres order patch failed", error);
+    return { ok: false, error: error.message };
+  }
+}
+
+async function writeOrdersBatchPatch(orderIds, values) {
+  try {
+    const response = await fetch("/api/orders-batch-patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_ids: orderIds, values }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok && data.ok !== false, error: data.error || "", postgres: data.postgres || null };
+  } catch (error) {
+    console.warn("Orders batch patch failed", error);
     return { ok: false, error: error.message };
   }
 }
@@ -5953,6 +6028,7 @@ async function savePickingNow(options = {}) {
     ? await writePickingChanges(changesToSend)
     : { ok: true, skipped: true };
   if (result.ok && changesToSend.length) state.pendingPickingChanges.splice(0, changesToSend.length);
+  if (result.ok && result.postgres && result.postgres.ok === false) state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   updateServerSaveStatus(result);
   state.serverSaveInProgress = false;
   if (result.ok && state.pendingPickingChanges.length) setTimeout(() => savePickingNow({ silent: true }), 50);
@@ -6023,7 +6099,7 @@ async function writePickingChanges(changes) {
     });
     if (response.ok) {
       const result = await response.json().catch(() => ({}));
-      return { ok: result.ok !== false, applied: result.applied || changes.length };
+      return { ok: result.ok !== false, applied: result.applied || changes.length, postgres: result.postgres || null };
     }
     const textValue = await response.text();
     return { ok: false, error: `${response.status} ${textValue}`.trim() };
