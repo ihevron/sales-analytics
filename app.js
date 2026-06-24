@@ -1157,14 +1157,26 @@ function setStatus(textValue) {
 }
 
 async function readSavedDatabase(SQL) {
-  const serverData = await readServerDatabase();
   const browserData = await readBrowserDatabase();
-  const serverScore = databaseScore(SQL, serverData);
-  const browserScore = databaseScore(SQL, browserData);
-
-  if (serverData && serverScore >= browserScore) return { data: serverData, source: "server" };
+  const browserVersion = await databaseVersionFromBytes(browserData);
+  if (browserVersion) {
+    state.databaseVersion = browserVersion;
+    localStorage.setItem("databaseVersion", browserVersion);
+  }
+  const serverData = await readServerDatabase();
+  if (serverData) return { data: serverData, source: "server" };
   if (browserData) return { data: browserData, source: "browser" };
   return null;
+}
+
+async function databaseVersionFromBytes(data) {
+  if (!data || !globalThis.crypto?.subtle) return "";
+  try {
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
+  }
 }
 
 function databaseScore(SQL, data) {

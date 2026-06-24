@@ -22,11 +22,11 @@
           </div>
         </div>
         <nav class="main-nav">
-          <button class="nav-item active" data-screen="dashboard"><span>🏠</span>דשבורד</button>
+          <button class="nav-item" data-screen="dashboard"><span>🏠</span>דשבורד</button>
           <button class="nav-item" data-screen="order-create"><span>📦</span>יצירת הזמנה</button>
           <button class="nav-item" data-screen="picking"><span>📋</span>ליקוט הזמנות</button>
           <button class="nav-item" data-screen="order-history"><span>🚚</span>הזמנות בתהליך</button>
-          <button class="nav-item" data-screen="calls"><span>📞</span>ניהול שיחות</button>
+          <button class="nav-item active" data-screen="calls"><span>📞</span>ניהול שיחות</button>
           <button class="nav-item" data-screen="reports"><span>📊</span>דוחות</button>
           <button class="nav-item" data-screen="customer-app"><span>🛒</span>אפליקציית לקוחות</button>
           <button class="nav-item" data-screen="recommendations"><span>📊</span>המלצות מכירה</button>
@@ -50,7 +50,7 @@
           </div>
         </header>
 
-        <section id="dashboard" class="screen active-screen">
+        <section id="dashboard" class="screen">
           <div class="toolbar">
             <div class="segmented" data-period-target="dashboard" role="group" aria-label="בחירת תקופה לדשבורד">
               <button data-months="3">3 חודשים</button>
@@ -285,7 +285,7 @@
           </div>
         </section>
 
-        <section id="calls" class="screen">
+        <section id="calls" class="screen active-screen">
           <div class="panel">
             <form id="call-form" class="inline-form call-form-legacy">
               <input type="hidden" id="call-id" />
@@ -565,8 +565,8 @@
         </section>
       </main>
       <nav class="bottom-nav" aria-label="ניווט מהיר במובייל">
-        <button class="nav-item active" data-screen="dashboard"><span>🏠</span><small>בית</small></button>
-        <button class="nav-item" data-screen="calls"><span>📞</span><small>שיחות</small></button>
+        <button class="nav-item" data-screen="dashboard"><span>🏠</span><small>בית</small></button>
+        <button class="nav-item active" data-screen="calls"><span>📞</span><small>שיחות</small></button>
         <button class="nav-item" data-screen="order-create"><span>📦</span><small>הזמנה</small></button>
         <button class="nav-item" data-screen="picking"><span>👷🏻‍♂️</span><small>ליקוט</small></button>
         <button class="nav-item" data-screen="reports"><span>📊</span><small>דוחות</small></button>
