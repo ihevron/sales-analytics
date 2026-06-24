@@ -2,6 +2,8 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
+const { promisify } = require("util");
 const { createPriceAuditService, isAuthorized: isPriceAuditAuthorized } = require("./price-audit-core");
 
 const root = __dirname;
@@ -22,6 +24,7 @@ const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
 const customerSessionSecret = process.env.CUSTOMER_SESSION_SECRET || supabaseServiceRoleKey || "local-customer-session-secret";
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
+const gzip = promisify(zlib.gzip);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
 let databaseBufferCache = null;
@@ -1278,13 +1281,27 @@ function enqueueDbMutation(task) {
   return run;
 }
 
-async function handleDatabaseGet(res) {
+async function handleDatabaseGet(req, res) {
   try {
     const data = await readCurrentDatabaseBuffer();
-    send(res, 200, data, {
+    const version = databaseVersion(data);
+    const clientVersion = String(req.headers["if-none-match"] || "").replace(/^"|"$/g, "").trim();
+    if (clientVersion && clientVersion === version) {
+      send(res, 304, "", {
+        "Cache-Control": "no-store",
+        ETag: `"${version}"`,
+        "X-Database-Version": version,
+      });
+      return;
+    }
+    const acceptsGzip = /\bgzip\b/i.test(String(req.headers["accept-encoding"] || ""));
+    const body = acceptsGzip ? await gzip(data, { level: 1 }) : data;
+    send(res, 200, body, {
       "Content-Type": "application/octet-stream",
       "Cache-Control": "no-store",
-      "X-Database-Version": databaseVersion(data),
+      ETag: `"${version}"`,
+      "X-Database-Version": version,
+      ...(acceptsGzip ? { "Content-Encoding": "gzip", Vary: "Accept-Encoding" } : {}),
     });
   } catch (error) {
     send(res, error.status === 404 ? 404 : 500, error.status === 404 ? "" : "database read failed");
@@ -2502,7 +2519,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (requestPath === "/api/db" && req.method === "GET") {
-    handleDatabaseGet(res).catch((error) => {
+    handleDatabaseGet(req, res).catch((error) => {
       console.error(error);
       send(res, 500, "database read failed");
     });

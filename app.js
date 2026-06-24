@@ -1191,9 +1191,13 @@ function tableCount(db, table) {
 
 async function readServerDatabase() {
   try {
-    const response = await fetch("/api/db", { cache: "no-store" });
+    const knownVersion = state.databaseVersion || localStorage.getItem("databaseVersion") || "";
+    const headers = knownVersion ? { "If-None-Match": `"${knownVersion}"` } : {};
+    const response = await fetch("/api/db", { cache: "no-store", headers });
+    if (response.status === 304) return null;
     if (!response.ok) return null;
     state.databaseVersion = response.headers.get("X-Database-Version") || "";
+    if (state.databaseVersion) localStorage.setItem("databaseVersion", state.databaseVersion);
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     console.warn("לא ניתן לטעון בסיס נתונים מהשרת", error);
@@ -1247,6 +1251,7 @@ async function writeServerDatabase(data) {
     const nextVersion = response.headers.get("X-Database-Version") || "";
     if (response.ok) {
       if (nextVersion) state.databaseVersion = nextVersion;
+      if (nextVersion) localStorage.setItem("databaseVersion", nextVersion);
       return { ok: true };
     }
     if (response.status === 409) {
