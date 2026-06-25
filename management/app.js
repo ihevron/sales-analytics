@@ -5590,10 +5590,14 @@ function renderCustomerAppCustomers() {
     { key: "terms_accepted_at", label: "אישור תנאים", format: fullDateDisplay },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
       <button class="small-action" data-edit-customer-app-customer="${escapeHtml(row.customer_no)}">עריכה</button>
+      <button class="danger-action" data-delete-customer-app-customer="${escapeHtml(row.customer_no)}">מחיקה</button>
     ` },
   ], "customer-app-customers", "customer_name", "asc");
   document.querySelectorAll("[data-edit-customer-app-customer]").forEach((button) => {
     button.addEventListener("click", () => editCustomerAppCustomer(button.dataset.editCustomerAppCustomer));
+  });
+  document.querySelectorAll("[data-delete-customer-app-customer]").forEach((button) => {
+    button.addEventListener("click", () => deleteCustomerAppCustomer(button.dataset.deleteCustomerAppCustomer));
   });
 }
 
@@ -5601,6 +5605,35 @@ function editCustomerAppCustomer(customerNo) {
   document.getElementById("customer-app-customer-no").value = customerNo;
   loadCustomerAppCustomer();
   showCustomerAppTab("customers");
+}
+
+async function deleteCustomerAppCustomer(customerNo) {
+  const row = firstRow("SELECT customer_name FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
+  const label = row.customer_name ? `${row.customer_name} (${customerNo})` : customerNo;
+  if (!confirm(`למחוק את הלקוח ${label} מאפליקציית הלקוחות?`)) return;
+  const status = document.getElementById("customer-app-customer-status");
+  status.textContent = "מוחק לקוח...";
+  try {
+    const response = await fetch("/api/customer-profile/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customerNo }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || "מחיקת לקוח נכשלה");
+    state.db.run("DELETE FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
+    await reloadDatabaseFromServer();
+    status.textContent = data.postgres?.ok === false ? "הלקוח נמחק מקובץ הנתונים, אך מחיקת Supabase נכשלה" : "הלקוח נמחק";
+    ["customer-app-customer-no", "customer-app-customer-name", "customer-app-company-id", "customer-app-phone", "customer-app-address"].forEach((id) => {
+      const input = document.getElementById(id);
+      if (input) input.value = "";
+    });
+    refreshCallCustomerSelect();
+    renderCustomerAppCustomers();
+  } catch (error) {
+    console.error(error);
+    status.textContent = error.message || "מחיקת לקוח נכשלה";
+  }
 }
 
 function refreshCustomerAppProductFilters() {

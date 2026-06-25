@@ -2181,6 +2181,44 @@ async function handleCustomerTerms(payload, req, res) {
   sendJson(res, 200, { ok: true, customer: profile ? normalizeCustomerProfile(profile) : null });
 }
 
+async function handleCustomerProfileDelete(payload, res) {
+  const customerNo = String(payload?.customerNo || payload?.customer_no || "").trim();
+  if (!customerNo) {
+    sendJson(res, 400, { ok: false, error: "customerNo is required" });
+    return;
+  }
+
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  let deleted = 0;
+  try {
+    ensureServerCustomerPortalSchema(db);
+    const before = sqliteRows(db, "SELECT COUNT(*) AS count FROM customer_call_profiles WHERE customer_no = ?", [customerNo])[0]?.count || 0;
+    db.run("DELETE FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
+    deleted = Number(before) || 0;
+    const exported = Buffer.from(db.export());
+    await writeCurrentDatabaseBuffer(exported);
+  } finally {
+    db.close();
+  }
+
+  let postgres = { ok: true };
+  if (usePostgresPreview) {
+    try {
+      await postgresRest(`customer_call_profiles?customer_no=eq.${encodeURIComponent(customerNo)}`, {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
+    } catch (error) {
+      console.error("customer profile postgres delete failed", error);
+      postgres = { ok: false, error: error.message };
+    }
+  }
+
+  sendJson(res, 200, { ok: true, deleted, postgres });
+}
+
 function productListPrice(row) {
   return numberValue(row.base_price) || numberValue(row.purchase_price) || numberValue(row.standard_cost);
 }
@@ -2279,7 +2317,6 @@ async function handleCustomerProducts(req, res) {
       .slice()
       .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
       .map((row, index) => [String(row.sku || ""), index + 1]));
-    const hasRecommendedProducts = visibleProducts.some((candidate) => numberValue(candidate.customer_quantity) > 0 || numberValue(candidate.customer_recommended) > 0);
     const normalizedDisplayOrder = (row) => {
       const value = numberValue(row.display_order);
       return value > 0 ? value : 999999;
@@ -2310,13 +2347,13 @@ async function handleCustomerProducts(req, res) {
         .sort(compareByCustomerSales)
         .slice(0, 30)
         .sort(compareByDisplayOrder);
-      const fallbackTop = hasRecommendedProducts || customerTop.length
-        ? []
-        : baseRows
-          .filter((row) => !manualSkus.has(String(row.sku || "")))
-          .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || compareByDisplayOrder(a, b))
-          .slice(0, 30)
-          .sort(compareByDisplayOrder);
+      const selectedSkus = new Set([...manualSkus, ...customerTop.map((row) => String(row.sku || ""))]);
+      const fallbackNeeded = Math.max(0, 30 - customerTop.length);
+      const fallbackTop = baseRows
+        .filter((row) => !selectedSkus.has(String(row.sku || "")))
+        .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || compareByDisplayOrder(a, b))
+        .slice(0, fallbackNeeded)
+        .sort(compareByDisplayOrder);
       sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
     } else if (section === "deals") {
       sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
@@ -2566,6 +2603,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/customer/terms" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleCustomerTerms(payload, req, res)));
+    return;
+  }
+
+  if (requestPath === "/api/customer-profile/delete" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleCustomerProfileDelete(payload, res)));
     return;
   }
 

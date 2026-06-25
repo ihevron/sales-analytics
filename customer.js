@@ -623,7 +623,6 @@ function renderCart() {
   const vat = subtotal * VAT_RATE;
   document.getElementById("summary-products-count").textContent = integer(items.length);
   document.getElementById("summary-units-count").textContent = integer(unitCount);
-  document.getElementById("summary-estimated").textContent = money(subtotal);
   document.getElementById("subtotal").textContent = money(subtotal);
   document.getElementById("vat").textContent = money(vat);
   document.getElementById("total").textContent = money(subtotal + vat);
