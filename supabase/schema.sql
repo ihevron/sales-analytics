@@ -17,6 +17,7 @@ create table if not exists public.products (
   promo_discount_percent numeric default 0,
   weight numeric default 0,
   supplier text,
+  display_order numeric default 999999,
   pick_order numeric default 999999,
   units_per_carton numeric default 1,
   hidden integer default 0,
@@ -30,8 +31,10 @@ alter table public.products add column if not exists promo_price numeric default
 alter table public.products add column if not exists promo_discount_percent numeric default 0;
 alter table public.products add column if not exists hidden integer default 0;
 alter table public.products add column if not exists customer_recommended integer default 0;
+alter table public.products add column if not exists display_order numeric default 999999;
 create index if not exists idx_products_barcode on public.products (barcode);
 create index if not exists idx_products_supplier_name on public.products (supplier);
+create index if not exists idx_products_display_order on public.products (display_order);
 
 create table if not exists public.product_customer_settings (
   sku text primary key,

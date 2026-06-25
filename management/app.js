@@ -169,7 +169,7 @@ const productColumns = {
   weight: ["משקל"],
   hidden: ["פריט לא פעיל", "לא פעיל", "מוסתר ללקוחות", "מוסתר"],
   supplier: ["שם ספק", "שם הספק", "ספק"],
-  pick_order: ["סדר ליקוט", "מיקום הפריט בסדר הליקוט", "סדר", "K", "קוד מיון"],
+  pick_order: ["סדר ליקוט", "מיקום הפריט בסדר הליקוט", "סדר"],
   units_per_carton: ["יחידות בקרטון", "כמות בקרטון", "יח' בקרטון", "מספר יחידות בקרטון"],
 };
 
@@ -309,6 +309,7 @@ function createSharedSchema() {
       promo_discount_percent REAL DEFAULT 0,
       weight REAL DEFAULT 0,
       supplier TEXT,
+      display_order REAL DEFAULT 999999,
       pick_order REAL DEFAULT 999999,
       units_per_carton REAL DEFAULT 1,
       hidden INTEGER NOT NULL DEFAULT 0,
@@ -881,7 +882,7 @@ function fixedProductRows(rows) {
     "משקל",
     "פריט לא פעיל",
     "שם ספק",
-    "לא רלוונטי 2",
+    "סדר תצוגה",
     "לא רלוונטי 3",
     "סדר ליקוט",
     "קישור תמונה",
@@ -919,12 +920,13 @@ function importProductRows(rows) {
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "sale_price", "REAL DEFAULT 0");
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
+  ensureColumn("products", "display_order", "REAL DEFAULT 999999");
   const existingImages = new Map(queryRows("SELECT sku, image_url FROM products WHERE COALESCE(TRIM(image_url), '') <> ''").map((row) => [text(row.sku), text(row.image_url)]));
   const existingProductSettings = productCustomerSettingsMap();
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, pick_order, units_per_carton, hidden, customer_recommended, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, display_order, pick_order, units_per_carton, hidden, customer_recommended, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
       barcode = excluded.barcode,
       image_url = excluded.image_url,
@@ -936,6 +938,7 @@ function importProductRows(rows) {
       promo_discount_percent = excluded.promo_discount_percent,
       weight = excluded.weight,
       supplier = excluded.supplier,
+      display_order = excluded.display_order,
       pick_order = excluded.pick_order,
       units_per_carton = excluded.units_per_carton,
       updated_at = excluded.updated_at
@@ -957,6 +960,7 @@ function importProductRows(rows) {
       promo_discount_percent: number(mapped.promo_discount_percent),
       weight: number(mapped.weight),
       supplier: text(mapped.supplier),
+      display_order: displayOrderValue(row),
       pick_order: pickOrderValue(row, mapped),
       units_per_carton: number(mapped.units_per_carton) || 1,
       hidden: inactiveFlag(mapped.hidden),
@@ -973,7 +977,7 @@ function importProductRows(rows) {
     product.hidden = hiddenValue;
     product.customer_recommended = customerRecommended;
     products.push(product);
-    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, promoPrice, promoDiscount, product.weight, product.supplier, product.pick_order, product.units_per_carton, hiddenValue, customerRecommended, now]);
+    stmt.run([product.sku, product.barcode, product.image_url, product.description, product.category, product.standard_cost, product.base_price, promoPrice, promoDiscount, product.weight, product.supplier, product.display_order, product.pick_order, product.units_per_carton, hiddenValue, customerRecommended, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
@@ -1307,6 +1311,11 @@ function dayFromText(value) {
 function pickOrderValue(row, mapped) {
   const mappedValue = number(mapped.pick_order);
   if (text(mapped.pick_order) !== "") return mappedValue;
+  const values = Object.values(row);
+  return number(values[12]) || 999999;
+}
+
+function displayOrderValue(row) {
   const values = Object.values(row);
   return number(values[10]) || 999999;
 }

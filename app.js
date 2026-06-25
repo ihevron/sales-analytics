@@ -108,6 +108,7 @@ function createSchema() {
       base_price REAL DEFAULT 0,
       weight REAL DEFAULT 0,
       supplier TEXT,
+      display_order REAL DEFAULT 999999,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sales_recommendations (
@@ -419,10 +420,11 @@ function importProductRows(rows) {
   const now = new Date().toISOString();
   const products = [];
   ensureColumn("products", "barcode", "TEXT");
+  ensureColumn("products", "display_order", "REAL DEFAULT 999999");
   const stmt = state.db.prepare(`
     INSERT INTO products
-    (sku, barcode, description, category, standard_cost, base_price, weight, supplier, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (sku, barcode, description, category, standard_cost, base_price, weight, supplier, display_order, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sku) DO UPDATE SET
       barcode = excluded.barcode,
       description = excluded.description,
@@ -431,6 +433,7 @@ function importProductRows(rows) {
       base_price = excluded.base_price,
       weight = excluded.weight,
       supplier = excluded.supplier,
+      display_order = excluded.display_order,
       updated_at = excluded.updated_at
   `);
   state.db.run("BEGIN TRANSACTION");
@@ -447,15 +450,21 @@ function importProductRows(rows) {
       sale_price: number(mapped.base_price),
       weight: number(mapped.weight),
       supplier: text(mapped.supplier),
+      display_order: displayOrderValue(row),
       updated_at: now,
     };
     product.purchase_price = product.standard_cost;
     products.push(product);
-    stmt.run([product.sku, product.barcode, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, now]);
+    stmt.run([product.sku, product.barcode, product.description, product.category, product.standard_cost, product.sale_price, product.weight, product.supplier, product.display_order, now]);
   });
   state.db.run("COMMIT");
   stmt.free();
   return [...new Map(products.map((product) => [product.sku, product])).values()];
+}
+
+function displayOrderValue(row) {
+  const values = Object.values(row);
+  return number(values[10]) || 999999;
 }
 
 async function importProductsToPostgres(products) {
