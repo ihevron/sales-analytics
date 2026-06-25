@@ -800,6 +800,8 @@ async function importFile(event, type) {
   try {
     setStatus("קורא קובץ");
     const rows = await readWorkbook(file);
+    setStatus("מרענן בסיס נתונים לפני ייבוא");
+    await reloadDatabaseFromServer();
     if (type === "sales") importSalesRows(rows);
     if (type === "products") {
       const importedProducts = importProductRows(rows);
@@ -987,6 +989,9 @@ async function importCustomerAppProductsFile(event) {
     await syncProductCustomerSettingsFromPostgres();
     const sheets = await readWorkbookAllSheets(file);
     const rows = fixedProductRows(sheets[0]?.rows || []);
+    status.textContent = "מרענן בסיס נתונים לפני ייבוא מוצרים...";
+    await reloadDatabaseFromServer();
+    await syncProductCustomerSettingsFromPostgres();
     const importedProducts = importProductRows(rows);
     await importProductsToPostgres(importedProducts);
     state.invoiceProductIndex = null;

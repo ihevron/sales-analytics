@@ -335,6 +335,8 @@ async function importFile(event, type) {
   try {
     setStatus("קורא קובץ");
     const rows = await readWorkbook(file);
+    setStatus("מרענן בסיס נתונים לפני ייבוא");
+    await reloadDatabaseFromServer();
     if (type === "sales") {
       importSalesRows(rows);
       repairShiftedMonthData();
@@ -1275,4 +1277,16 @@ async function writeServerDatabase(data) {
     console.warn("לא ניתן לשמור בסיס נתונים בשרת", error);
     return { ok: false, error: error.message };
   }
+}
+
+async function reloadDatabaseFromServer() {
+  const data = await readServerDatabase();
+  if (!data) return false;
+  const SQL = await window.initSqlJs({ locateFile: (file) => SQL_WASM + file });
+  if (state.db) state.db.close();
+  state.db = new SQL.Database(data);
+  createSchema();
+  rebuildSummaryTables();
+  await writeBrowserDatabase(data);
+  return true;
 }
