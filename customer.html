@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>הזמנה ללקוח</title>
     <link rel="icon" type="image/png" href="./management/wa-logo.png" />
-    <link rel="stylesheet" href="./customer.css?v=20260619sort2" />
-    <script defer src="./customer.js?v=20260619sort2"></script>
+    <link rel="stylesheet" href="./customer.css?v=20260625customer1" />
+    <script defer src="./customer.js?v=20260625customer1"></script>
   </head>
   <body>
     <main class="customer-shell">
@@ -74,29 +74,20 @@
 
         <div class="catalog-layout">
           <aside class="catalog-nav">
-            <button class="nav-pill active" data-section="recommended">המומלצים שלי</button>
+            <button class="nav-pill active" data-section="recommended">הנמכרים שלי</button>
             <button class="nav-pill" data-section="deals">מבצעים</button>
             <button class="nav-pill" data-section="all">כל המוצרים</button>
           </aside>
 
           <section class="catalog-panel">
             <div class="catalog-title">
-              <h2 id="section-title">המומלצים שלי</h2>
+              <h2 id="section-title">הנמכרים שלי</h2>
               <p id="section-subtitle" hidden></p>
-            </div>
-            <div class="sort-buttons" role="group" aria-label="מיון מוצרים">
-              <button class="sort-button" type="button" data-sort="customer">הנמכרים שלי</button>
-              <button class="sort-button" type="button" data-sort="supplier">לפי ספק</button>
-              <button class="sort-button" type="button" data-sort="name">א-ב</button>
             </div>
             <div class="toolbar">
               <label class="search-box">
                 חיפוש מוצר
                 <input id="product-search" type="search" placeholder="שם מוצר, מק״ט או ברקוד" />
-              </label>
-              <label>
-                ספק
-                <select id="supplier-filter"></select>
               </label>
               <label>
                 קטגוריה
@@ -118,6 +109,9 @@
               <textarea id="order-note" rows="3"></textarea>
             </label>
             <div class="summary">
+              <div><span>כמות מוצרים</span><strong id="summary-products-count">0</strong></div>
+              <div><span>כמות יחידות</span><strong id="summary-units-count">0</strong></div>
+              <div><span>סכום משוער</span><strong id="summary-estimated">₪0.00</strong></div>
               <div><span>סה״כ לפני מע״מ</span><strong id="subtotal">₪0.00</strong></div>
               <div><span>מע״מ 18%</span><strong id="vat">₪0.00</strong></div>
               <div class="total"><span>סה״כ כולל מע״מ</span><strong id="total">₪0.00</strong></div>

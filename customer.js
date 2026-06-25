@@ -7,7 +7,7 @@ const FALLBACK_IMAGE = "./management/wa-logo.png";
 
 const SECTION_TEXT = {
   recommended: {
-    title: "המומלצים שלי",
+    title: "הנמכרים שלי",
     subtitle: "",
   },
   deals: {
@@ -39,13 +39,10 @@ const state = {
   token: localStorage.getItem(TOKEN_KEY) || "",
   customer: safeJson(localStorage.getItem(CUSTOMER_KEY), null),
   products: [],
-  suppliers: [],
   categories: [],
   cart: safeJson(localStorage.getItem(CART_KEY), {}),
   search: "",
-  supplier: "",
   category: "",
-  sort: "pick",
   section: "recommended",
   hasCustomerHistory: false,
   quantitySku: "",
@@ -69,21 +66,10 @@ async function init() {
     state.search = event.target.value.trim();
     loadProducts();
   }, 250));
-  document.getElementById("supplier-filter").addEventListener("change", (event) => {
-    state.supplier = event.target.value;
-    loadProducts();
-  });
   document.getElementById("category-filter").addEventListener("change", (event) => {
     state.category = event.target.value;
     state.section = state.category ? "all" : state.section;
     loadProducts();
-  });
-  document.querySelectorAll("[data-sort]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const nextSort = button.dataset.sort || "pick";
-      state.sort = state.sort === nextSort ? "pick" : nextSort;
-      loadProducts();
-    });
   });
   document.getElementById("submit-order").addEventListener("click", submitOrder);
   document.getElementById("cart-fab").addEventListener("click", openCart);
@@ -117,9 +103,6 @@ async function init() {
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
       state.section = button.dataset.section;
-      if (state.section === "all" || state.section === "deals" || state.section === "recommended") {
-        state.sort = "pick";
-      }
       loadProducts();
     });
   });
@@ -360,13 +343,11 @@ async function loadProducts() {
   const grid = document.getElementById("product-grid");
   grid.innerHTML = `<div class="empty-state">טוען מוצרים...</div>`;
   try {
-    const params = new URLSearchParams({ limit: state.section === "all" ? "3000" : "300", section: state.section, sort: state.sort });
+    const params = new URLSearchParams({ limit: state.section === "all" ? "3000" : "300", section: state.section });
     if (state.search) params.set("q", state.search);
-    if (state.supplier) params.set("supplier", state.supplier);
     if (state.category) params.set("category", state.category);
     const data = await api(`/api/customer/products?${params.toString()}`);
     state.products = Array.isArray(data.rows) ? data.rows : [];
-    state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
     state.categories = Array.isArray(data.categories) ? data.categories : [];
     state.hasCustomerHistory = Boolean(data.hasCustomerHistory);
     renderFilters();
@@ -383,13 +364,12 @@ async function loadProducts() {
 }
 
 function renderFilters() {
-  fillSelect(document.getElementById("supplier-filter"), "כל הספקים", state.suppliers, state.supplier);
   fillSelect(document.getElementById("category-filter"), "כל הקטגוריות", state.categories, state.category);
 }
 
 function fillSelect(select, defaultLabel, values, selected) {
   const current = selected && values.includes(selected) ? selected : "";
-  if (selected && !current) state[select.id === "supplier-filter" ? "supplier" : "category"] = "";
+  if (selected && !current) state.category = "";
   select.innerHTML = [
     `<option value="">${defaultLabel}</option>`,
     ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`),
@@ -400,9 +380,6 @@ function fillSelect(select, defaultLabel, values, selected) {
 function updateNavigation() {
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === state.section);
-  });
-  document.querySelectorAll("[data-sort]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.sort === state.sort);
   });
   const text = SECTION_TEXT[state.section] || SECTION_TEXT.all;
   const subtitle = state.category ? "" : text.subtitle;
@@ -615,10 +592,14 @@ function renderCart() {
   } else {
     list.innerHTML = items.map((item) => `
       <div class="cart-item">
-        <div>
-          <strong>${escapeHtml(item.product?.description || item.sku)}</strong>
-          <small>${integer(item.quantity)} יח׳ · ${money((item.product?.price || 0) * item.quantity)}</small>
-          <textarea class="cart-item-note" data-cart-note="${escapeHtml(item.sku)}" rows="2" placeholder="הערה לפריט">${escapeHtml(item.note || "")}</textarea>
+        <img class="cart-item-image" src="${escapeHtml(item.product?.image_url || FALLBACK_IMAGE)}" alt="" loading="lazy" onerror="this.src='${FALLBACK_IMAGE}'" />
+        <div class="cart-item-main">
+          <div class="cart-item-title-row">
+            <strong>${escapeHtml(item.product?.description || item.sku)}</strong>
+            <span>${money((item.product?.price || 0) * item.quantity)}</span>
+          </div>
+          <small>כמות: ${integer(item.quantity)}</small>
+          <textarea class="cart-item-note" data-cart-note="${escapeHtml(item.sku)}" rows="1" placeholder="הערת מוצר">${escapeHtml(item.note || "")}</textarea>
         </div>
         <div class="cart-item-actions">
           <button type="button" data-cart-minus="${escapeHtml(item.sku)}" aria-label="הפחתת כמות">−</button>
@@ -638,7 +619,11 @@ function renderCart() {
   }
 
   const subtotal = items.reduce((sum, item) => sum + ((Number(item.product?.price) || 0) * item.quantity), 0);
+  const unitCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const vat = subtotal * VAT_RATE;
+  document.getElementById("summary-products-count").textContent = integer(items.length);
+  document.getElementById("summary-units-count").textContent = integer(unitCount);
+  document.getElementById("summary-estimated").textContent = money(subtotal);
   document.getElementById("subtotal").textContent = money(subtotal);
   document.getElementById("vat").textContent = money(vat);
   document.getElementById("total").textContent = money(subtotal + vat);

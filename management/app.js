@@ -169,7 +169,7 @@ const productColumns = {
   weight: ["משקל"],
   hidden: ["פריט לא פעיל", "לא פעיל", "מוסתר ללקוחות", "מוסתר"],
   supplier: ["שם ספק", "שם הספק", "ספק"],
-  pick_order: ["סדר ליקוט", "מיקום הפריט בסדר הליקוט", "סדר", "M", "קוד מיון"],
+  pick_order: ["סדר ליקוט", "מיקום הפריט בסדר הליקוט", "סדר", "K", "קוד מיון"],
   units_per_carton: ["יחידות בקרטון", "כמות בקרטון", "יח' בקרטון", "מספר יחידות בקרטון"],
 };
 
@@ -963,8 +963,8 @@ function importProductRows(rows) {
     product.purchase_price = product.standard_cost;
     const savedSettings = existingProductSettings.get(product.sku) || {};
     const hiddenValue = text(mapped.hidden) ? product.hidden : (savedSettings.hidden || 0);
-    const promoPrice = savedSettings.sale_price > 0 ? savedSettings.sale_price : product.sale_price;
-    const promoDiscount = savedSettings.promo_discount_percent > 0 ? savedSettings.promo_discount_percent : product.promo_discount_percent;
+    const promoPrice = number(savedSettings.sale_price);
+    const promoDiscount = number(savedSettings.promo_discount_percent);
     const customerRecommended = savedSettings.customer_recommended || 0;
     product.sale_price = promoPrice;
     product.promo_discount_percent = promoDiscount;
@@ -1303,7 +1303,7 @@ function pickOrderValue(row, mapped) {
   const mappedValue = number(mapped.pick_order);
   if (text(mapped.pick_order) !== "") return mappedValue;
   const values = Object.values(row);
-  return number(values[12]) || 999999;
+  return number(values[10]) || 999999;
 }
 
 function renderDashboard() {
@@ -5318,11 +5318,19 @@ function renderCustomerAppPromotions() {
   if (!table) return;
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  ensureProductCustomerSettings();
   const rows = queryRows(`
-    SELECT sku, description, supplier, category, base_price AS sale_price, sale_price AS promo_price, promo_discount_percent, customer_recommended
-    FROM products
-    WHERE COALESCE(sale_price, 0) > 0 OR COALESCE(promo_discount_percent, 0) > 0 OR COALESCE(customer_recommended, 0) > 0
-    ORDER BY updated_at DESC, description ASC
+    SELECT p.sku, p.description, p.supplier, p.category, p.base_price AS sale_price,
+      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended,
+      COALESCE(s.updated_at, p.updated_at) AS updated_at
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0
+      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+      OR COALESCE(s.customer_recommended, p.customer_recommended, 0) > 0
+    ORDER BY updated_at DESC, p.description ASC
     LIMIT 50
   `);
   renderTable("customer-app-promotions-table", rows, [
@@ -5371,9 +5379,15 @@ async function saveCustomerAppPromo(clearPromo = false) {
     SET sale_price = ?, promo_discount_percent = ?, updated_at = ?
     WHERE sku = ?
   `, [promoPrice, promoDiscount, new Date().toISOString(), sku]);
+  const updatedAt = new Date().toISOString();
   saveProductCustomerSetting(sku, { sale_price: promoPrice, promo_discount_percent: promoDiscount });
-  const result = await persistDatabase();
-  status.textContent = result.server.ok ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר") : "נשמר בדפדפן בלבד";
+  const [result, postgres] = await Promise.all([
+    persistDatabase(),
+    updatePostgresProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, updated_at: updatedAt }),
+  ]);
+  status.textContent = result.server.ok && postgres.ok !== false
+    ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר")
+    : "המבצע נשמר מקומית, אך הסנכרון לשרת לא הושלם";
   document.getElementById("customer-app-promo-sku").value = sku;
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
@@ -5398,12 +5412,16 @@ function selectedCustomerAppPromoSku() {
 }
 
 function handleCustomerAppPromoProductInput() {
+  ensureProductCustomerSettings();
   const input = document.getElementById("customer-app-promo-product-query");
   const value = text(input.value);
   const row = firstRow(`
-    SELECT sku, description, base_price, sale_price, promo_discount_percent
-    FROM products
-    WHERE sku = ? OR description = ?
+    SELECT p.sku, p.description, p.base_price,
+      COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE p.sku = ? OR p.description = ?
     LIMIT 1
   `, [value, value]);
   document.getElementById("customer-app-promo-sku").value = row.sku || "";
@@ -5434,14 +5452,26 @@ async function resetCustomerAppPromotions() {
   state.db.run("UPDATE products SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
   ensureProductCustomerSettings();
   state.db.run("UPDATE product_customer_settings SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
-  const result = await persistDatabase();
-  document.getElementById("customer-app-promo-status").textContent = result.server.ok ? "כל המבצעים אופסו" : "נשמר בדפדפן בלבד";
+  const skus = queryRows("SELECT sku FROM products WHERE COALESCE(TRIM(sku), '') <> ''").map((row) => String(row.sku || ""));
+  const [result, postgres] = await Promise.all([
+    persistDatabase(),
+    updatePostgresProductSettings(skus, { sale_price: 0, promo_discount_percent: 0, updated_at: new Date().toISOString() }),
+  ]);
+  document.getElementById("customer-app-promo-status").textContent = result.server.ok && postgres.ok !== false ? "כל המבצעים אופסו" : "המבצעים אופסו מקומית, אך הסנכרון לשרת לא הושלם";
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
 }
 
 function editCustomerAppPromo(sku) {
-  const row = firstRow("SELECT sku, description, sale_price, promo_discount_percent FROM products WHERE sku = ?", [sku]);
+  ensureProductCustomerSettings();
+  const row = firstRow(`
+    SELECT p.sku, p.description,
+      COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE p.sku = ?
+  `, [sku]);
   if (!row.sku) return;
   document.getElementById("customer-app-promo-sku").value = row.sku;
   document.getElementById("customer-app-promo-product-query").value = `${row.sku} · ${row.description || ""}`;
@@ -5572,22 +5602,24 @@ function renderCustomerAppProducts() {
   ensureColumn("products", "promo_discount_percent", "REAL DEFAULT 0");
   ensureColumn("products", "hidden", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  ensureProductCustomerSettings();
   const query = `%${text(document.getElementById("customer-app-product-query")?.value)}%`;
   const supplier = document.getElementById("customer-app-product-supplier")?.value || "";
   const category = document.getElementById("customer-app-product-category")?.value || "";
   const rows = queryRows(`
-    SELECT sku, description, category, supplier, standard_cost,
-      base_price AS sale_price,
-      sale_price AS promo_price,
-      promo_discount_percent,
-      weight,
-      hidden,
-      customer_recommended
-    FROM products
-    WHERE (sku LIKE ? OR description LIKE ?)
-      AND (? = '' OR supplier = ?)
-      AND (? = '' OR category = ?)
-    ORDER BY description ASC
+    SELECT p.sku, p.description, p.category, p.supplier, p.standard_cost,
+      p.base_price AS sale_price,
+      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      p.weight,
+      COALESCE(s.hidden, p.hidden, 0) AS hidden,
+      COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE (p.sku LIKE ? OR p.description LIKE ?)
+      AND (? = '' OR p.supplier = ?)
+      AND (? = '' OR p.category = ?)
+    ORDER BY p.description ASC
     LIMIT 700
   `, [query, query, supplier, supplier, category, category]);
   renderTable("customer-app-products-table", rows, [
@@ -5677,14 +5709,24 @@ async function setCustomerAppProductsHidden(skus, hidden) {
 
 async function toggleCustomerAppProductRecommended(sku) {
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
-  const row = firstRow("SELECT customer_recommended FROM products WHERE sku = ?", [sku]);
+  ensureProductCustomerSettings();
+  const row = firstRow(`
+    SELECT COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE p.sku = ?
+  `, [sku]);
+  const nextRecommended = number(row.customer_recommended) ? 0 : 1;
   state.db.run("UPDATE products SET customer_recommended = ?, updated_at = ? WHERE sku = ?", [
-    number(row.customer_recommended) ? 0 : 1,
+    nextRecommended,
     new Date().toISOString(),
     sku,
   ]);
-  saveProductCustomerSetting(sku, { customer_recommended: number(row.customer_recommended) ? 0 : 1 });
-  await persistDatabase();
+  saveProductCustomerSetting(sku, { customer_recommended: nextRecommended });
+  await Promise.all([
+    persistDatabase(),
+    updatePostgresProductSettings([sku], { customer_recommended: nextRecommended, updated_at: new Date().toISOString() }),
+  ]);
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
 }

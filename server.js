@@ -1215,20 +1215,20 @@ async function applyProductCustomerSettingsToSqliteBuffer(body) {
         (sku, sale_price, promo_discount_percent, hidden, customer_recommended, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(sku) DO UPDATE SET
-          sale_price = CASE WHEN excluded.sale_price > 0 THEN excluded.sale_price ELSE product_customer_settings.sale_price END,
-          promo_discount_percent = CASE WHEN excluded.promo_discount_percent > 0 THEN excluded.promo_discount_percent ELSE product_customer_settings.promo_discount_percent END,
-          hidden = CASE WHEN excluded.hidden <> 0 THEN excluded.hidden ELSE product_customer_settings.hidden END,
-          customer_recommended = CASE WHEN excluded.customer_recommended <> 0 THEN excluded.customer_recommended ELSE product_customer_settings.customer_recommended END,
+          sale_price = excluded.sale_price,
+          promo_discount_percent = excluded.promo_discount_percent,
+          hidden = excluded.hidden,
+          customer_recommended = excluded.customer_recommended,
           updated_at = excluded.updated_at
       `, [sku, salePrice, promoDiscount, hidden, recommended, now]);
       db.run(`
         UPDATE products SET
-          sale_price = CASE WHEN ? > 0 THEN ? ELSE sale_price END,
-          promo_discount_percent = CASE WHEN ? > 0 THEN ? ELSE promo_discount_percent END,
-          hidden = CASE WHEN ? <> 0 THEN ? ELSE hidden END,
-          customer_recommended = CASE WHEN ? <> 0 THEN ? ELSE customer_recommended END
+          sale_price = ?,
+          promo_discount_percent = ?,
+          hidden = ?,
+          customer_recommended = ?
         WHERE sku = ?
-      `, [salePrice, salePrice, promoDiscount, promoDiscount, hidden, hidden, recommended, recommended, sku]);
+      `, [salePrice, promoDiscount, hidden, recommended, sku]);
     });
     db.run("COMMIT");
     return Buffer.from(db.export());
@@ -2226,13 +2226,15 @@ async function handleCustomerProducts(req, res) {
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
-  const supplier = String(url.searchParams.get("supplier") || "").trim();
   const category = String(url.searchParams.get("category") || "").trim();
   const section = String(url.searchParams.get("section") || "recommended").trim();
-  const sort = String(url.searchParams.get("sort") || "pick").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 3000);
   const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
+    const hasProductSettings = tableExists(db, "product_customer_settings");
+    const settingsSelect = (column, fallback) => hasProductSettings
+      ? `CASE WHEN pcs.sku IS NOT NULL THEN pcs.${column} ELSE ${fallback} END AS ${column}`
+      : `${fallback} AS ${column}`;
     const select = [
       "p.sku",
       "p.description",
@@ -2241,14 +2243,14 @@ async function handleCustomerProducts(req, res) {
       "p.standard_cost",
       columns.has("base_price") ? "p.base_price" : "0 AS base_price",
       columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
-      columns.has("sale_price") ? "p.sale_price" : "0 AS sale_price",
-      columns.has("promo_discount_percent") ? "p.promo_discount_percent" : "0 AS promo_discount_percent",
+      settingsSelect("sale_price", columns.has("sale_price") ? "p.sale_price" : "0"),
+      settingsSelect("promo_discount_percent", columns.has("promo_discount_percent") ? "p.promo_discount_percent" : "0"),
       columns.has("weight") ? "p.weight" : "0 AS weight",
       columns.has("barcode") ? "p.barcode" : "'' AS barcode",
       columns.has("image_url") ? "p.image_url" : "'' AS image_url",
       columns.has("pick_order") ? "p.pick_order" : "999999 AS pick_order",
-      columns.has("hidden") ? "p.hidden" : "0 AS hidden",
-      columns.has("customer_recommended") ? "p.customer_recommended" : "0 AS customer_recommended",
+      settingsSelect("hidden", columns.has("hidden") ? "p.hidden" : "0"),
+      settingsSelect("customer_recommended", columns.has("customer_recommended") ? "p.customer_recommended" : "0"),
       "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
       "COALESCE(gu.global_quantity, 0) AS global_quantity",
     ].join(", ");
@@ -2263,13 +2265,13 @@ async function handleCustomerProducts(req, res) {
     const all = sqliteRows(db, `
       SELECT ${select}
       FROM products p
+      ${hasProductSettings ? "LEFT JOIN product_customer_settings pcs ON pcs.sku = p.sku" : ""}
       LEFT JOIN (${customerUsage}) cu ON cu.sku = p.sku
       LEFT JOIN (${globalUsage}) gu ON gu.sku = p.sku
       ORDER BY COALESCE(cu.customer_quantity, 0) DESC, COALESCE(gu.global_quantity, 0) DESC, p.description ASC
       LIMIT 3000
     `, hasCustomerSummary || hasSalesRaw ? [session.customer_no] : []);
     const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);
-    const suppliers = [...new Set(visibleProducts.map((row) => String(row.supplier || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const rankBySku = new Map(visibleProducts
       .slice()
@@ -2282,29 +2284,18 @@ async function handleCustomerProducts(req, res) {
     };
     const compareByPickOrder = (a, b) =>
       normalizedPickOrder(a) - normalizedPickOrder(b)
-      || String(a.supplier || "").localeCompare(String(b.supplier || ""), "he")
       || String(a.description || "").localeCompare(String(b.description || ""), "he");
     const compareByCustomerSales = (a, b) =>
       numberValue(b.customer_quantity) - numberValue(a.customer_quantity)
       || numberValue(b.global_quantity) - numberValue(a.global_quantity)
       || compareByPickOrder(a, b);
-    const compareBySupplier = (a, b) =>
-      String(a.supplier || "").localeCompare(String(b.supplier || ""), "he")
-      || compareByPickOrder(a, b);
-    const compareByName = (a, b) => String(a.description || "").localeCompare(String(b.description || ""), "he");
-    const sortProducts = (rows) => {
-      const compare = sort === "supplier"
-        ? compareBySupplier
-        : (sort === "name" ? compareByName : (sort === "customer" ? compareByCustomerSales : compareByPickOrder));
-      return rows.slice().sort(compare);
-    };
+    const sortProducts = (rows) => rows.slice().sort(compareByPickOrder);
     const baseRows = visibleProducts
       .filter((row) => {
         if (!query) return true;
         return [row.sku, row.description, row.category, row.supplier, row.barcode]
           .some((value) => String(value || "").toLowerCase().includes(query));
       })
-      .filter((row) => !supplier || String(row.supplier || "") === supplier)
       .filter((row) => !category || String(row.category || "") === category);
     let sourceRows = baseRows;
     if (section === "recommended") {
@@ -2325,7 +2316,6 @@ async function handleCustomerProducts(req, res) {
           .slice(0, 30)
           .sort(compareByPickOrder);
       sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
-      if (sort !== "pick") sourceRows = sortProducts(sourceRows);
     } else if (section === "deals") {
       sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
     } else {
@@ -2358,7 +2348,6 @@ async function handleCustomerProducts(req, res) {
       });
     return {
       rows: filtered,
-      suppliers,
       categories,
       hasCustomerHistory: visibleProducts.some((row) => numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0),
     };

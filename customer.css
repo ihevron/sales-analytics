@@ -303,7 +303,7 @@ select:focus {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(140px, 190px) minmax(140px, 190px);
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, 220px);
   gap: 10px;
   align-items: end;
   margin-bottom: 12px;
@@ -335,28 +335,6 @@ select:focus {
 .catalog-title p {
   margin: 4px 0 0;
   color: var(--muted);
-}
-
-.sort-buttons {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 10px;
-}
-
-.sort-button {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 12px;
-  background: #fff;
-  color: var(--ink);
-  font-weight: 900;
-}
-
-.sort-button.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
 }
 
 .product-grid {
@@ -544,15 +522,37 @@ select:focus {
 
 .cart-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr);
   gap: 10px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 10px;
 }
 
+.cart-item-image {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 5px;
+}
+
+.cart-item-main {
+  min-width: 0;
+}
+
+.cart-item-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
 .cart-item strong {
   display: block;
   margin-bottom: 4px;
+  line-height: 1.35;
 }
 
 .cart-item small {
@@ -569,6 +569,9 @@ select:focus {
 
 .cart-item-note {
   margin-top: 8px;
+  min-height: 36px;
+  resize: none;
+  overflow: hidden;
 }
 
 .cart-remove {
@@ -586,6 +589,7 @@ select:focus {
   flex-wrap: wrap;
   gap: 7px;
   align-items: center;
+  grid-column: 1 / -1;
 }
 
 .cart-item-actions button {
@@ -916,16 +920,6 @@ body.terms-open {
     grid-template-columns: 1fr;
     gap: 8px;
     margin-bottom: 10px;
-  }
-
-  .sort-buttons {
-    gap: 6px;
-  }
-
-  .sort-button {
-    padding: 8px 5px;
-    font-size: 13px;
-    white-space: nowrap;
   }
 
   .catalog-nav {
