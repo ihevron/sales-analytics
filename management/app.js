@@ -3061,9 +3061,9 @@ function renderPickingByProduct() {
         <tbody>
           ${rows.length ? rows.map((row) => `
             <tr class="${pickingCategoryClass(row.category, row.pick_order)}">
-              ${showProductColumn ? `<td><strong>${returnRiskDot(row.returns_percent)}${escapeHtml(row.product_desc)}</strong><small class="pick-note">${escapeHtml(row.sku)}</small></td>` : ""}
+              ${showProductColumn ? `<td class="pick-product-cell">${returnRiskDot(row.returns_percent)}<strong>${escapeHtml(row.product_desc)}</strong><small class="pick-note">${escapeHtml(row.sku)}</small></td>` : ""}
               <td>
-                <strong>${showProductColumn ? "" : returnRiskDot(row.returns_percent)}${escapeHtml(row.customer_name)}</strong>
+                <strong>${escapeHtml(row.customer_name)}</strong>
                 <small class="pick-note">הזמנה ${integer(row.order_id)}</small>
                 ${row.order_notes ? `<small class="pick-note">הערות הזמנה: ${escapeHtml(row.order_notes)}</small>` : ""}
                 ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
@@ -3121,7 +3121,7 @@ function pickingOrderItemsHtml(orderId) {
     <tr class="${pickingCategoryClass(row.category, row.pick_order)}">
       <td><button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button></td>
       <td><input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
-      <td>
+      <td class="pick-product-cell">
         ${returnRiskDot(row.returns_percent)}<button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
         ${row.is_carton ? `<small class="pick-note">כמות בקרטונים: ${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
         ${row.substitute_product_id ? `<small class="pick-note">חלופי נבחר: ${escapeHtml(row.substitute_product_id)}</small>` : ""}

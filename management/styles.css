@@ -825,6 +825,19 @@ textarea { resize: vertical; }
 .return-dot-mid { background: var(--warn); }
 .return-dot-high { background: var(--danger); }
 
+.pick-product-cell {
+  position: relative;
+  padding-inline-start: 24px !important;
+}
+
+.pick-product-cell .return-risk-dot {
+  position: absolute;
+  inset-inline-start: 7px;
+  top: 50%;
+  margin: 0;
+  transform: translateY(-50%);
+}
+
 .pick-product-button,
 .pick-quantity-button {
   padding: 0;
