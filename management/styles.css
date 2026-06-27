@@ -828,6 +828,7 @@ textarea { resize: vertical; }
 .pick-product-cell {
   position: relative;
   padding-inline-start: 24px !important;
+  min-width: 0;
 }
 
 .pick-product-cell .return-risk-dot {
@@ -836,6 +837,22 @@ textarea { resize: vertical; }
   top: 50%;
   margin: 0;
   transform: translateY(-50%);
+}
+
+.pick-product-cell strong,
+.pick-product-cell .pick-product-button {
+  display: -webkit-box;
+  max-height: 2.4em;
+  overflow: hidden;
+  line-height: 1.2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.pick-product-cell .pick-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pick-product-button,

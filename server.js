@@ -23,7 +23,7 @@ const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
 const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
 const customerSessionSecret = process.env.CUSTOMER_SESSION_SECRET || supabaseServiceRoleKey || "local-customer-session-secret";
-const orderPushWebhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL || "";
+const orderPushWebhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL || "https://ntfy.sh/hevron-orders-9f3k92x";
 const orderPushToken = process.env.ORDER_PUSH_TOKEN || "";
 const orderPushFormat = String(process.env.ORDER_PUSH_FORMAT || "").trim().toLowerCase();
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
@@ -2580,6 +2580,10 @@ const server = http.createServer((req, res) => {
         host: supabaseUrl ? new URL(supabaseUrl).host : "",
         bucket: supabaseBucket,
         object: supabaseDbObject,
+      },
+      orderPush: {
+        configured: Boolean(orderPushWebhookUrl),
+        provider: /\/\/[^/]*ntfy\./i.test(orderPushWebhookUrl) ? "ntfy" : (orderPushWebhookUrl ? "webhook" : ""),
       },
       databaseCache: {
         loaded: Boolean(databaseBufferCache),
