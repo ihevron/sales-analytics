@@ -23,6 +23,9 @@ const postgresPreviewKey = process.env.SUPABASE_POSTGRES_SERVICE_ROLE_KEY || "";
 const usePostgresPreview = Boolean(postgresPreviewUrl && postgresPreviewKey);
 const priceAuditApiKey = process.env.PRICE_AUDIT_API_KEY || "";
 const customerSessionSecret = process.env.CUSTOMER_SESSION_SECRET || supabaseServiceRoleKey || "local-customer-session-secret";
+const orderPushWebhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL || "";
+const orderPushToken = process.env.ORDER_PUSH_TOKEN || "";
+const orderPushFormat = String(process.env.ORDER_PUSH_FORMAT || "").trim().toLowerCase();
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
 const gzip = promisify(zlib.gzip);
 let SQLRuntimePromise = null;
@@ -1793,6 +1796,36 @@ async function mirrorOrderBatchPatchToPostgres(orderIds, row) {
   }
 }
 
+async function notifyNewOrder(orderRow) {
+  if (!orderPushWebhookUrl || !orderRow?.id) return { ok: true, skipped: true };
+  const customerName = String(orderRow.customer_name || orderRow.customer_no || "לקוח").trim();
+  const message = `${customerName} ביצע הזמנה`;
+  const isNtfy = orderPushFormat === "ntfy" || /\/\/[^/]*ntfy\./i.test(orderPushWebhookUrl);
+  const headers = isNtfy
+    ? {
+        "Content-Type": "text/plain; charset=utf-8",
+        Title: "הזמנה חדשה",
+        Tags: "shopping_cart",
+        ...(orderPushToken ? { Authorization: `Bearer ${orderPushToken}` } : {}),
+      }
+    : {
+        "Content-Type": "application/json",
+        ...(orderPushToken ? { Authorization: `Bearer ${orderPushToken}` } : {}),
+      };
+  const body = isNtfy
+    ? message
+    : JSON.stringify({
+        title: "הזמנה חדשה",
+        message,
+        customerName,
+        customerNo: String(orderRow.customer_no || ""),
+        orderId: numberValue(orderRow.id),
+      });
+  const response = await fetch(orderPushWebhookUrl, { method: "POST", headers, body });
+  if (!response.ok) throw new Error(`order push failed: ${response.status} ${await response.text()}`);
+  return { ok: true };
+}
+
 async function handleOrderDelta(payload, res) {
   const order = payload && typeof payload.order === "object" ? payload.order : null;
   const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -1813,12 +1846,14 @@ async function handleOrderDelta(payload, res) {
     db.run("BEGIN TRANSACTION");
 
     let orderId = 0;
+    let createdOrder = false;
     if (clientOrderKey) {
       const existing = db.exec("SELECT id FROM customer_orders WHERE client_order_key = ? LIMIT 1", [clientOrderKey]);
       orderId = Number(existing[0]?.values?.[0]?.[0] || 0);
     }
 
     if (!orderId) {
+      createdOrder = true;
       db.run(`
         INSERT INTO customer_orders (order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, updated_at, client_order_key)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1896,7 +1931,16 @@ async function handleOrderDelta(payload, res) {
       };
     }
     const postgresResult = await mirrorOrderToPostgres(savedOrderRows[0], savedItemRows, postgresCall);
-    sendJson(res, 200, { ok: true, orderId, applied: 1, postgres: postgresResult });
+    let push = { ok: true, skipped: true };
+    if (createdOrder) {
+      try {
+        push = await notifyNewOrder(savedOrderRows[0]);
+      } catch (error) {
+        console.error("new order push failed", error);
+        push = { ok: false, error: error.message };
+      }
+    }
+    sendJson(res, 200, { ok: true, orderId, applied: 1, postgres: postgresResult, push });
   } catch (error) {
     try {
       db.run("ROLLBACK");

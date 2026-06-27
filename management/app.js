@@ -2585,11 +2585,20 @@ function orderLineUnits(item) {
   return Math.abs(number(item.quantity)) * multiplier;
 }
 
-function pickingCategoryClass(category) {
+function pickingCategoryClass(category, pickOrder = 0) {
+  const order = number(pickOrder);
+  if (order >= 8000 && order <= 9999) return "pick-category-cold";
+  if (order >= 3000 && order <= 3999) return "pick-category-dry";
   const value = String(category || "").trim();
   if (value.includes("קפוא") || value.includes("בצק")) return "pick-category-cold";
   if (value.includes("יבש")) return "pick-category-dry";
   return "";
+}
+
+function returnRiskDot(value) {
+  const rate = number(value);
+  const cls = returnPercentClass(rate).replace("return-", "return-dot-");
+  return `<span class="return-risk-dot ${cls}" title="אחוז חזרות: ${percent(rate)}" aria-label="אחוז חזרות ${percent(rate)}"></span>`;
 }
 
 function compareOrderLineDisplay(a, b) {
@@ -3019,12 +3028,20 @@ function renderPickingByProduct() {
       i.is_carton,
       i.units_per_carton,
       p.category,
+      COALESCE(p.pick_order, 999999) AS pick_order,
+      COALESCE(r.returns_percent, 0) AS returns_percent,
       o.id AS order_id,
       o.customer_name,
       o.notes AS order_notes
     FROM customer_order_items i
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
+    LEFT JOIN (
+      SELECT sku,
+        CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      FROM sales_raw
+      GROUP BY sku
+    ) r ON r.sku = i.sku
     WHERE o.status = 'מוכן לאיסוף'
       AND COALESCE(o.shipped_at, '') = ''
       AND COALESCE(o.process_hidden, 0) = 0
@@ -3043,10 +3060,10 @@ function renderPickingByProduct() {
         <thead><tr>${showProductColumn ? "<th>מוצר</th>" : ""}<th>שם לקוח</th><th></th><th>כמות</th><th></th></tr></thead>
         <tbody>
           ${rows.length ? rows.map((row) => `
-            <tr class="${pickingCategoryClass(row.category)}">
-              ${showProductColumn ? `<td><strong>${escapeHtml(row.product_desc)}</strong><small class="pick-note">${escapeHtml(row.sku)}</small></td>` : ""}
+            <tr class="${pickingCategoryClass(row.category, row.pick_order)}">
+              ${showProductColumn ? `<td><strong>${returnRiskDot(row.returns_percent)}${escapeHtml(row.product_desc)}</strong><small class="pick-note">${escapeHtml(row.sku)}</small></td>` : ""}
               <td>
-                <strong>${escapeHtml(row.customer_name)}</strong>
+                <strong>${showProductColumn ? "" : returnRiskDot(row.returns_percent)}${escapeHtml(row.customer_name)}</strong>
                 <small class="pick-note">הזמנה ${integer(row.order_id)}</small>
                 ${row.order_notes ? `<small class="pick-note">הערות הזמנה: ${escapeHtml(row.order_notes)}</small>` : ""}
                 ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
@@ -3072,10 +3089,20 @@ function renderPickingByProduct() {
 
 function pickingOrderItemsHtml(orderId) {
   const pending = queryRows(`
-    SELECT i.id, i.sku, i.product_desc, i.quantity, i.picked_quantity, i.note, i.is_carton, i.units_per_carton, p.category, o.notes AS order_notes
+    SELECT i.id, i.sku, i.product_desc, i.quantity, i.picked_quantity, i.note, i.is_carton, i.units_per_carton,
+      p.category,
+      COALESCE(p.pick_order, 999999) AS pick_order,
+      COALESCE(r.returns_percent, 0) AS returns_percent,
+      o.notes AS order_notes
     FROM customer_order_items i
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
+    LEFT JOIN (
+      SELECT sku,
+        CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
+      FROM sales_raw
+      GROUP BY sku
+    ) r ON r.sku = i.sku
     WHERE i.order_id = ? AND COALESCE(i.item_status, 'pending') = 'pending'
     ORDER BY COALESCE(p.pick_order, 999999), i.id
   `, [orderId]);
@@ -3091,11 +3118,11 @@ function pickingOrderItemsHtml(orderId) {
   const totalLines = pickableRows.length;
   const totalUnits = pickableRows.reduce((sum, row) => sum + orderLineUnits(row), 0);
   const pendingRows = pending.length ? pending.map((row) => `
-    <tr class="${pickingCategoryClass(row.category)}">
+    <tr class="${pickingCategoryClass(row.category, row.pick_order)}">
       <td><button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button></td>
       <td><input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
       <td>
-        <button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
+        ${returnRiskDot(row.returns_percent)}<button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
         ${row.is_carton ? `<small class="pick-note">כמות בקרטונים: ${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
         ${row.substitute_product_id ? `<small class="pick-note">חלופי נבחר: ${escapeHtml(row.substitute_product_id)}</small>` : ""}
         ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}

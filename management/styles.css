@@ -811,6 +811,20 @@ textarea { resize: vertical; }
 .pick-ok { background: var(--ok); }
 .pick-missing { background: var(--danger); }
 
+.return-risk-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-inline-end: 7px;
+  border-radius: 50%;
+  vertical-align: middle;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.86);
+}
+
+.return-dot-low { background: var(--ok); }
+.return-dot-mid { background: var(--warn); }
+.return-dot-high { background: var(--danger); }
+
 .pick-product-button,
 .pick-quantity-button {
   padding: 0;
