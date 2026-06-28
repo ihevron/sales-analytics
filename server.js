@@ -1804,9 +1804,8 @@ async function notifyNewOrder(orderRow) {
   const headers = isNtfy
     ? {
         "Content-Type": "text/plain; charset=utf-8",
-        Title: "הזמנה חדשה",
+        Title: "New order",
         Tags: "shopping_cart",
-        ...(orderPushToken ? { Authorization: `Bearer ${orderPushToken}` } : {}),
       }
     : {
         "Content-Type": "application/json",

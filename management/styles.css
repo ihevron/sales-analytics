@@ -827,13 +827,13 @@ textarea { resize: vertical; }
 
 .pick-product-cell {
   position: relative;
-  padding-inline-start: 24px !important;
+  padding-inline-start: 18px !important;
   min-width: 0;
 }
 
 .pick-product-cell .return-risk-dot {
   position: absolute;
-  inset-inline-start: 7px;
+  inset-inline-start: 4px;
   top: 50%;
   margin: 0;
   transform: translateY(-50%);
@@ -1731,24 +1731,40 @@ ul {
   .picking-order-items .compact-table td:nth-child(1),
   .product-picking-table th:nth-last-child(2),
   .product-picking-table td:nth-last-child(2) {
-    width: 64px;
+    width: 42px;
+  }
+  .picking-order-items .compact-table th:nth-child(2),
+  .picking-order-items .compact-table td:nth-child(2),
+  .product-picking-table th:nth-child(2),
+  .product-picking-table td:nth-child(2) {
+    width: 56px;
   }
   .picking-order-items .compact-table th:last-child,
   .picking-order-items .compact-table td:last-child,
   .product-picking-table th:last-child,
   .product-picking-table td:last-child {
-    width: 76px;
+    width: 42px;
     text-align: left;
     white-space: nowrap;
   }
   .pick-action {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
+    margin-inline-start: 0;
     font-size: 14px;
   }
   .pick-quantity-input {
-    width: 58px;
-    min-width: 58px;
+    width: 52px;
+    min-width: 52px;
+    padding-inline: 4px;
+  }
+  .pick-product-cell {
+    padding-inline-start: 14px !important;
+  }
+  .pick-product-cell .return-risk-dot {
+    width: 9px;
+    height: 9px;
+    inset-inline-start: 2px;
   }
 
   .call-contact-actions {
