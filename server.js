@@ -1425,6 +1425,27 @@ async function handlePickingChanges(payload, res) {
     return;
   }
 
+  if (usePostgresPreview) {
+    const postgresResult = await mirrorPickingChangesToPostgres(changes);
+    if (postgresResult.ok === false) {
+      sendJson(res, 500, {
+        ok: false,
+        error: postgresResult.error || "postgres picking save failed",
+        postgres: postgresResult,
+        storage: "postgres",
+      });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      applied: changes.length,
+      postgres: postgresResult,
+      storage: "postgres",
+      sqliteSkipped: true,
+    });
+    return;
+  }
+
   const SQL = await initServerSql();
   const data = await readCurrentDatabaseBuffer();
   const db = new SQL.Database(new Uint8Array(data));
@@ -2570,6 +2591,7 @@ const server = http.createServer((req, res) => {
       ok: true,
       storage: useSupabase ? "supabase" : "disk",
       pickingChangesApi: true,
+      pickingChangesStorage: usePostgresPreview ? "postgres" : (useSupabase ? "sqlite-supabase" : "sqlite-disk"),
       postgresPreview: {
         configured: usePostgresPreview,
         host: postgresPreviewUrl ? new URL(postgresPreviewUrl).host : "",
