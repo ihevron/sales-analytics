@@ -669,6 +669,7 @@ function bindEvents() {
   document.getElementById("order-customer-results").addEventListener("mousedown", handleOrderCustomerResult);
   document.getElementById("order-product-results").addEventListener("mousedown", handleOrderProductResult);
   document.getElementById("product-modal-confirm").addEventListener("click", confirmProductDialog);
+  document.getElementById("modal-product-quantity").addEventListener("input", syncProductDialogReturnFromQuantity);
   document.getElementById("modal-product-quantity").addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -2466,10 +2467,20 @@ function closeProductDialog() {
   document.getElementById("product-modal").classList.add("hidden");
 }
 
+function syncProductDialogReturnFromQuantity() {
+  const quantityInput = document.getElementById("modal-product-quantity");
+  const rawQuantity = number(quantityInput.value);
+  if (rawQuantity >= 0) return;
+  quantityInput.value = String(Math.abs(rawQuantity));
+  document.getElementById("modal-product-return").checked = true;
+}
+
 function confirmProductDialog() {
-  const quantity = number(document.getElementById("modal-product-quantity").value);
+  const quantityInput = document.getElementById("modal-product-quantity");
+  const rawQuantity = number(quantityInput.value);
+  const quantity = Math.abs(rawQuantity);
   const note = text(document.getElementById("modal-product-note").value);
-  const isReturn = document.getElementById("modal-product-return").checked;
+  const isReturn = rawQuantity < 0 || document.getElementById("modal-product-return").checked;
   const isCarton = document.getElementById("modal-product-carton").checked;
   if (!state.pendingProduct || quantity <= 0) return;
   addSkuToOrder(state.pendingProduct.sku, quantity, isReturn, isCarton, note);
@@ -2566,7 +2577,7 @@ function renderOrderTables() {
       ${row.is_carton ? `<small class="order-line-note">קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
       ${duplicateKeys.has(`${row.sku}::${row.is_return ? "return" : "order"}`) ? `<small class="order-line-note warning">מוצר מופיע בהזמנה</small>` : ""}
     ` },
-    { key: "quantity", label: "כמות", render: (row) => `<input class="order-qty-input" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" value="${escapeAttr(row.quantity)}" data-order-qty="${escapeAttr(row.line_id)}" />` },
+    { key: "quantity", label: "כמות", render: (row) => `<input class="order-qty-input" type="number" inputmode="decimal" step="1" value="${escapeAttr(row.quantity)}" data-order-qty="${escapeAttr(row.line_id)}" />` },
     { key: "note", label: "הערה", render: (row) => `<input value="${escapeAttr(row.note)}" data-order-note="${escapeAttr(row.line_id)}" />` },
     { key: "actions", label: "פעולה", sortable: false, render: (row) => `<button class="danger-action" data-remove-order="${escapeAttr(row.line_id)}">מחיקה</button>` },
   ], "orderItems", "display_sort", "asc");
@@ -2689,7 +2700,13 @@ function renderOrderRecommendations() {
 
 function updateOrderItem(lineId, key, value) {
   const item = state.orderItems.find((entry) => String(entry.line_id) === String(lineId));
-  if (item) item[key] = value;
+  if (item && key === "quantity") {
+    const quantity = number(value);
+    item.quantity = Math.abs(quantity);
+    if (quantity < 0) item.is_return = true;
+  } else if (item) {
+    item[key] = value;
+  }
   renderOrderTables();
 }
 
