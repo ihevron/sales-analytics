@@ -6253,7 +6253,15 @@ async function writePickingChanges(changes) {
       return { ok: result.ok !== false, applied: result.applied || changes.length, postgres: result.postgres || null };
     }
     const textValue = await response.text();
-    return { ok: false, error: `${response.status} ${textValue}`.trim() };
+    const errorBody = (() => {
+      try {
+        return JSON.parse(textValue);
+      } catch (error) {
+        return null;
+      }
+    })();
+    const errorMessage = errorBody?.message || errorBody?.error || textValue;
+    return { ok: false, error: `${response.status} ${errorMessage}`.trim() };
   } catch (error) {
     console.warn("לא ניתן לשמור שינויי ליקוט בשרת", error);
     return { ok: false, error: error.message };

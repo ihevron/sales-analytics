@@ -149,6 +149,17 @@ async function postgresRows(pathname) {
   return response.json();
 }
 
+function friendlyPostgresError(error) {
+  const message = error?.message || "";
+  if (/customer_order_items|PGRST205|schema cache|relation|does not exist/i.test(message)) {
+    return "חסרה ב-Supabase טבלת customer_order_items. יש להריץ את קובץ ה-SQL supabase/fix-customer-order-items.sql ואז ללחוץ שוב שמירה לשרת.";
+  }
+  if (/customer_orders/i.test(message)) {
+    return "חסרה ב-Supabase טבלת customer_orders. יש להריץ את קובץ ה-SQL supabase/fix-customer-order-items.sql ואז ללחוץ שוב שמירה לשרת.";
+  }
+  return message || "postgres preview failed";
+}
+
 async function handlePostgresPreview(res) {
   if (!usePostgresPreview) {
     sendJson(res, 200, {
@@ -1425,8 +1436,9 @@ async function handlePickingChanges(payload, res) {
     return;
   }
 
+  let postgresResult = { ok: true, skipped: true };
   if (usePostgresPreview) {
-    const postgresResult = await mirrorPickingChangesToPostgres(changes);
+    postgresResult = await mirrorPickingChangesToPostgres(changes);
     if (postgresResult.ok === false) {
       sendJson(res, 500, {
         ok: false,
@@ -1436,14 +1448,6 @@ async function handlePickingChanges(payload, res) {
       });
       return;
     }
-    sendJson(res, 200, {
-      ok: true,
-      applied: changes.length,
-      postgres: postgresResult,
-      storage: "postgres",
-      sqliteSkipped: true,
-    });
-    return;
   }
 
   const SQL = await initServerSql();
@@ -1527,8 +1531,13 @@ async function handlePickingChanges(payload, res) {
     db.run("COMMIT");
     const exported = Buffer.from(db.export());
     await writeCurrentDatabaseBuffer(exported);
-    const postgresResult = await mirrorPickingChangesToPostgres(changes);
-    sendJson(res, 200, { ok: true, applied: changes.length, postgres: postgresResult });
+    if (!usePostgresPreview) postgresResult = await mirrorPickingChangesToPostgres(changes);
+    sendJson(res, 200, {
+      ok: true,
+      applied: changes.length,
+      postgres: postgresResult,
+      storage: usePostgresPreview ? "postgres+sqlite" : "sqlite",
+    });
   } catch (error) {
     try {
       db.run("ROLLBACK");
@@ -1722,7 +1731,7 @@ async function mirrorOrderToPostgres(orderRow, itemRows, callRow = null) {
     return { ok: true, orderId: numberValue(orderRow.id), items: itemRows.length };
   } catch (error) {
     console.error("postgres order mirror failed", error);
-    return { ok: false, error: error.message || "postgres order mirror failed" };
+    return { ok: false, error: friendlyPostgresError(error), rawError: error.message || "postgres order mirror failed" };
   }
 }
 
@@ -1789,7 +1798,7 @@ async function mirrorPickingChangesToPostgres(changes) {
     return { ok: true, applied: changes.length };
   } catch (error) {
     console.error("postgres picking mirror failed", error);
-    return { ok: false, error: error.message || "postgres picking mirror failed" };
+    return { ok: false, error: friendlyPostgresError(error), rawError: error.message || "postgres picking mirror failed" };
   }
 }
 
