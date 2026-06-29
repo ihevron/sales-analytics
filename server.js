@@ -1693,9 +1693,9 @@ function normalizePostgresOrder(row) {
     estimated_profit: numberValue(row.estimated_profit),
     picked_by: row.picked_by || null,
     picked_at: row.picked_at || null,
-    invoice_printed: Boolean(numberValue(row.invoice_printed)),
+    invoice_printed: numberValue(row.invoice_printed) ? 1 : 0,
     shipped_at: row.shipped_at || null,
-    process_hidden: Boolean(numberValue(row.process_hidden)),
+    process_hidden: numberValue(row.process_hidden) ? 1 : 0,
     client_order_key: row.client_order_key || null,
     updated_at: row.updated_at || new Date().toISOString(),
   };
@@ -1714,9 +1714,9 @@ function normalizePostgresOrderItem(row) {
     substitute_product_id: row.substitute_product_id || null,
     action_sequence: row.action_sequence === null || row.action_sequence === undefined ? null : numberValue(row.action_sequence),
     entry_sequence: numberValue(row.entry_sequence),
-    is_carton: Boolean(numberValue(row.is_carton)),
+    is_carton: numberValue(row.is_carton) ? 1 : 0,
     units_per_carton: numberValue(row.units_per_carton) || 1,
-    shortage_dismissed: Boolean(numberValue(row.shortage_dismissed)),
+    shortage_dismissed: numberValue(row.shortage_dismissed) ? 1 : 0,
     estimated_price: numberValue(row.estimated_price),
     estimated_profit: numberValue(row.estimated_profit),
   };
@@ -1767,12 +1767,12 @@ async function mirrorPickingChangesToPostgres(changes) {
           item_status: "pending",
           picked_quantity: numberValue(change.pickedQuantity),
           action_sequence: null,
-          shortage_dismissed: false,
+          shortage_dismissed: 0,
         });
       }
       if (type === "itemShortageDismissed") {
         await postgresPatch("customer_order_items", `id=eq.${encodeURIComponent(numberValue(change.itemId))}`, {
-          shortage_dismissed: change.shortageDismissed === false ? false : true,
+          shortage_dismissed: change.shortageDismissed === false ? 0 : 1,
         });
       }
       if (type === "productUnits") {
