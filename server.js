@@ -27,10 +27,6 @@ const orderPushWebhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL || "https://ntfy.
 const orderPushToken = process.env.ORDER_PUSH_TOKEN || "";
 const orderPushFormat = String(process.env.ORDER_PUSH_FORMAT || "").trim().toLowerCase();
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
-const trafficLogEnabled = String(process.env.TRAFFIC_LOG_ENABLED || "1") !== "0";
-const trafficLogDir = path.resolve(process.env.TRAFFIC_LOG_DIR || path.join(dataDir, "traffic-logs"));
-const trafficLogSecret = process.env.TRAFFIC_LOG_SECRET || customerSessionSecret || supabaseServiceRoleKey || "traffic-log-secret";
-const trafficConsoleLogMinBytes = Number(process.env.TRAFFIC_CONSOLE_LOG_MIN_BYTES || 1024 * 1024);
 const gzip = promisify(zlib.gzip);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
@@ -92,165 +88,6 @@ function send(res, status, body = "", headers = {}) {
 
 function sendJson(res, status, body) {
   send(res, status, JSON.stringify(body), { "Content-Type": "application/json; charset=utf-8" });
-}
-
-function byteLength(value) {
-  if (!value) return 0;
-  if (Buffer.isBuffer(value)) return value.length;
-  if (value instanceof Uint8Array) return value.byteLength;
-  return Buffer.byteLength(String(value));
-}
-
-function trafficLogPath(date = new Date()) {
-  return path.join(trafficLogDir, `traffic-${date.toISOString().slice(0, 10)}.jsonl`);
-}
-
-function safeHeaderValue(value, max = 180) {
-  return String(value || "").replace(/[\r\n]+/g, " ").slice(0, max);
-}
-
-function requestIpHash(req) {
-  const raw = String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").split(",")[0].trim();
-  if (!raw) return "";
-  return crypto.createHmac("sha256", trafficLogSecret).update(raw).digest("hex").slice(0, 16);
-}
-
-function routeKey(req) {
-  const requestPath = (req.url || "/").split("?")[0] || "/";
-  if (requestPath.startsWith("/node_modules/")) return "/node_modules/*";
-  return requestPath;
-}
-
-function attachTrafficLogger(req, res) {
-  if (!trafficLogEnabled) return;
-
-  const startedAt = Date.now();
-  let responseBytes = 0;
-  let statusCode = 200;
-  let logged = false;
-  const originalWriteHead = res.writeHead;
-  const originalWrite = res.write;
-  const originalEnd = res.end;
-
-  res.writeHead = function patchedWriteHead(status) {
-    statusCode = Number(status) || statusCode;
-    return originalWriteHead.apply(this, arguments);
-  };
-
-  res.write = function patchedWrite(chunk, encoding, callback) {
-    responseBytes += byteLength(chunk);
-    return originalWrite.call(this, chunk, encoding, callback);
-  };
-
-  res.end = function patchedEnd(chunk, encoding, callback) {
-    responseBytes += byteLength(chunk);
-    const result = originalEnd.call(this, chunk, encoding, callback);
-    logTrafficOnce();
-    return result;
-  };
-
-  res.on("close", logTrafficOnce);
-
-  function logTrafficOnce() {
-    if (logged) return;
-    logged = true;
-    const entry = {
-      ts: new Date().toISOString(),
-      method: req.method || "GET",
-      path: routeKey(req),
-      status: statusCode || res.statusCode || 0,
-      responseBytes,
-      durationMs: Date.now() - startedAt,
-      contentType: safeHeaderValue(res.getHeader?.("Content-Type"), 120),
-      contentEncoding: safeHeaderValue(res.getHeader?.("Content-Encoding"), 40),
-      ifNoneMatch: Boolean(req.headers["if-none-match"]),
-      userAgent: safeHeaderValue(req.headers["user-agent"], 220),
-      referer: safeHeaderValue(req.headers.referer, 220),
-      ipHash: requestIpHash(req),
-    };
-    if (responseBytes >= trafficConsoleLogMinBytes) {
-      console.log("[traffic]", JSON.stringify(entry));
-    }
-    fs.promises.mkdir(trafficLogDir, { recursive: true })
-      .then(() => fs.promises.appendFile(trafficLogPath(), `${JSON.stringify(entry)}\n`))
-      .catch((error) => console.error("traffic log write failed", error));
-  }
-}
-
-function compactUserAgent(value) {
-  const ua = String(value || "");
-  if (/iPhone|iPad/i.test(ua)) return "iOS Safari/Chrome";
-  if (/Android/i.test(ua)) return "Android";
-  if (/Edg\//i.test(ua)) return "Edge";
-  if (/Chrome\//i.test(ua)) return "Chrome";
-  if (/Firefox\//i.test(ua)) return "Firefox";
-  if (/Safari\//i.test(ua)) return "Safari";
-  return ua ? ua.slice(0, 60) : "unknown";
-}
-
-function addTrafficStats(bucket, entry) {
-  const bytes = Number(entry.responseBytes || 0);
-  bucket.requests += 1;
-  bucket.bytes += bytes;
-  if (Number(entry.status) === 304) bucket.notModified += 1;
-  if (Number(entry.status) >= 400) bucket.errors += 1;
-  bucket.maxBytes = Math.max(bucket.maxBytes, bytes);
-}
-
-async function handleTrafficSummary(req, res) {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  const days = Math.max(1, Math.min(31, Number(url.searchParams.get("days") || 7)));
-  const now = new Date();
-  const byPath = new Map();
-  const byHour = new Map();
-  const byStatus = new Map();
-  const byUserAgent = new Map();
-  const total = { requests: 0, bytes: 0, notModified: 0, errors: 0, maxBytes: 0 };
-
-  for (let offset = 0; offset < days; offset += 1) {
-    const date = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
-    let content = "";
-    try {
-      content = await fs.promises.readFile(trafficLogPath(date), "utf8");
-    } catch (error) {
-      if (error.code !== "ENOENT") console.error("traffic summary read failed", error);
-      continue;
-    }
-    for (const line of content.split(/\n+/)) {
-      if (!line.trim()) continue;
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      addTrafficStats(total, entry);
-      const pathKey = `${entry.method || "GET"} ${entry.path || "/"}`;
-      if (!byPath.has(pathKey)) byPath.set(pathKey, { key: pathKey, requests: 0, bytes: 0, notModified: 0, errors: 0, maxBytes: 0 });
-      addTrafficStats(byPath.get(pathKey), entry);
-      const hourKey = String(entry.ts || "").slice(0, 13) || "unknown";
-      if (!byHour.has(hourKey)) byHour.set(hourKey, { key: hourKey, requests: 0, bytes: 0, notModified: 0, errors: 0, maxBytes: 0 });
-      addTrafficStats(byHour.get(hourKey), entry);
-      const statusKey = String(entry.status || 0);
-      if (!byStatus.has(statusKey)) byStatus.set(statusKey, { key: statusKey, requests: 0, bytes: 0, notModified: 0, errors: 0, maxBytes: 0 });
-      addTrafficStats(byStatus.get(statusKey), entry);
-      const uaKey = compactUserAgent(entry.userAgent);
-      if (!byUserAgent.has(uaKey)) byUserAgent.set(uaKey, { key: uaKey, requests: 0, bytes: 0, notModified: 0, errors: 0, maxBytes: 0 });
-      addTrafficStats(byUserAgent.get(uaKey), entry);
-    }
-  }
-
-  const top = (map, limit = 20) => [...map.values()].sort((a, b) => b.bytes - a.bytes).slice(0, limit);
-  sendJson(res, 200, {
-    ok: true,
-    days,
-    total,
-    totalGb: Number((total.bytes / 1024 / 1024 / 1024).toFixed(3)),
-    byPath: top(byPath),
-    byHour: top(byHour, 200).sort((a, b) => a.key.localeCompare(b.key)),
-    byStatus: top(byStatus),
-    byUserAgent: top(byUserAgent),
-  });
 }
 
 function databaseVersion(body) {
@@ -2756,16 +2593,7 @@ function handleStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  attachTrafficLogger(req, res);
   const requestPath = (req.url || "/").split("?")[0];
-
-  if (requestPath === "/api/traffic-summary" && req.method === "GET") {
-    handleTrafficSummary(req, res).catch((error) => {
-      console.error(error);
-      sendJson(res, 500, { ok: false, error: error.message || "traffic summary failed" });
-    });
-    return;
-  }
 
   if (requestPath === "/healthz") {
     sendJson(res, 200, {
