@@ -1077,9 +1077,16 @@ function toSqlDate(date) {
 }
 
 function dateRange(months) {
-  const end = firstDayOfCurrentMonth();
+  const end = latestSalesMonthEnd();
   const start = addMonths(end, -months);
   return { start: toSqlDate(start), end: toSqlDate(end) };
+}
+
+function latestSalesMonthEnd() {
+  const row = firstRow("SELECT MAX(sale_date) AS max_date FROM sales_raw");
+  const maxDate = parseDate(row.max_date);
+  if (!maxDate) return firstDayOfCurrentMonth();
+  return addMonths(new Date(maxDate.getFullYear(), maxDate.getMonth(), 1), 1);
 }
 
 function currentInclusiveRange(months) {

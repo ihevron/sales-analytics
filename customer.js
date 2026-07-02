@@ -18,6 +18,10 @@ const SECTION_TEXT = {
     title: "כל המוצרים",
     subtitle: "",
   },
+  returns: {
+    title: "החזרות",
+    subtitle: "מוצרים שנרכשו בשנה האחרונה. כל כמות כאן תירשם כהחזרה.",
+  },
 };
 
 const DEFAULT_CUSTOMER_SETTINGS = {
@@ -85,7 +89,9 @@ async function init() {
   document.getElementById("quantity-plus").addEventListener("click", () => adjustQuantitySheet(1));
   document.getElementById("quantity-select").addEventListener("change", (event) => {
     if (!state.quantitySku) return;
-    setQuantity(state.quantitySku, Number(event.target.value) || 0);
+    const item = state.cart[state.quantitySku];
+    const sku = item?.sku || state.quantitySku;
+    setQuantity(sku, Number(event.target.value) || 0, { isReturn: Boolean(item?.isReturn) });
     closeQuantitySheet();
   });
   document.getElementById("quantity-input").addEventListener("keydown", (event) => {
@@ -402,9 +408,12 @@ function renderProducts() {
     return;
   }
   grid.innerHTML = state.products.map((product) => {
-    const quantity = state.cart[product.sku]?.quantity || 0;
+    const isReturnSection = state.section === "returns";
+    const cartKey = cartKeyFor(product.sku, isReturnSection);
+    const cartItem = state.cart[cartKey] || {};
+    const quantity = cartItem.quantity || 0;
     const image = product.image_url || FALLBACK_IMAGE;
-    const badge = product.customer_recommended ? "מומלץ עבורך" : (product.popularity_label || "");
+    const badge = isReturnSection ? "החזרה" : (product.customer_recommended ? "מומלץ עבורך" : (product.popularity_label || ""));
     const badgeClass = badge === "Top 10" ? "top10" : (badge === "Top 100" ? "top100" : "recommended");
     return `
       <article class="product-card">
@@ -414,23 +423,29 @@ function renderProducts() {
           <div class="product-meta">מק״ט ${escapeHtml(product.sku)}${product.category ? ` · ${escapeHtml(product.category)}` : ""}</div>
           ${badge ? `<div class="product-badge ${badgeClass}">${escapeHtml(badge)}</div>` : ""}
           ${renderPrice(product)}
-          <div class="quantity-row" data-sku="${escapeHtml(product.sku)}">
+          <div class="quantity-row" data-sku="${escapeHtml(product.sku)}" data-cart-key="${escapeHtml(cartKey)}" data-return="${isReturnSection ? "1" : "0"}">
             <button type="button" data-action="minus" aria-label="הפחתה">−</button>
             <select class="quantity-inline-select" data-action="quantity-select" aria-label="בחירת כמות">
               ${quantitySelectOptions(quantity)}
             </select>
             <button type="button" data-action="plus" aria-label="הוספה">+</button>
           </div>
-          ${quantity > 0 ? `<textarea class="item-note-input" data-item-note="${escapeHtml(product.sku)}" rows="2" placeholder="הערה לפריט">${escapeHtml(state.cart[product.sku]?.note || "")}</textarea>` : ""}
+          ${quantity > 0 ? `<label class="carton-toggle"><input type="checkbox" data-carton-toggle="${escapeHtml(cartKey)}" ${cartItem.isCarton ? "checked" : ""} /> הכמות בקרטונים</label>` : ""}
+          ${quantity > 0 ? `<textarea class="item-note-input" data-item-note="${escapeHtml(cartKey)}" rows="2" placeholder="הערה לפריט">${escapeHtml(cartItem.note || "")}</textarea>` : ""}
         </div>
       </article>
     `;
   }).join("");
   grid.querySelectorAll(".quantity-row").forEach((row) => {
     const sku = row.dataset.sku;
-    row.querySelector('[data-action="minus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) - 1));
-    row.querySelector('[data-action="plus"]').addEventListener("click", () => setQuantity(sku, (state.cart[sku]?.quantity || 0) + 1));
-    row.querySelector('[data-action="quantity-select"]').addEventListener("change", (event) => setQuantity(sku, Number(event.target.value) || 0));
+    const key = row.dataset.cartKey;
+    const isReturn = row.dataset.return === "1";
+    row.querySelector('[data-action="minus"]').addEventListener("click", () => setQuantity(sku, (state.cart[key]?.quantity || 0) - 1, { isReturn }));
+    row.querySelector('[data-action="plus"]').addEventListener("click", () => setQuantity(sku, (state.cart[key]?.quantity || 0) + 1, { isReturn }));
+    row.querySelector('[data-action="quantity-select"]').addEventListener("change", (event) => setQuantity(sku, Number(event.target.value) || 0, { isReturn }));
+  });
+  grid.querySelectorAll("[data-carton-toggle]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => setCartonMode(checkbox.dataset.cartonToggle, checkbox.checked));
   });
   grid.querySelectorAll("[data-item-note]").forEach((textarea) => {
     textarea.addEventListener("input", () => updateItemNote(textarea.dataset.itemNote, textarea.value, false));
@@ -464,19 +479,40 @@ function renderPrice(product) {
   `;
 }
 
-function productBySku(sku) {
-  return state.products.find((product) => product.sku === sku) || state.cart[sku]?.product || null;
+function cartKeyFor(sku, isReturn = false) {
+  return isReturn ? `${sku}::return` : String(sku || "");
 }
 
-function setQuantity(sku, quantity) {
+function productBySku(sku) {
+  return state.products.find((product) => product.sku === sku) || Object.values(state.cart).find((item) => item.sku === sku)?.product || null;
+}
+
+function setQuantity(sku, quantity, options = {}) {
+  const isReturn = Boolean(options.isReturn);
   const product = productBySku(sku);
   if (!product) return;
+  const key = cartKeyFor(sku, isReturn);
   const nextQuantity = Math.max(0, Math.min(999, Math.round(Number(quantity) || 0)));
   if (nextQuantity <= 0) {
-    delete state.cart[sku];
+    delete state.cart[key];
   } else {
-    state.cart[sku] = { quantity: nextQuantity, product, note: state.cart[sku]?.note || "" };
+    state.cart[key] = {
+      sku,
+      quantity: nextQuantity,
+      product,
+      note: state.cart[key]?.note || "",
+      isReturn,
+      isCarton: Boolean(state.cart[key]?.isCarton),
+    };
   }
+  saveCart();
+  renderCart();
+  renderProducts();
+}
+
+function setCartonMode(cartKey, checked) {
+  if (!state.cart[cartKey]) return;
+  state.cart[cartKey].isCarton = Boolean(checked);
   saveCart();
   renderCart();
   renderProducts();
@@ -494,17 +530,21 @@ function fillQuantityOptions() {
   options.querySelectorAll("[data-quantity]").forEach((button) => {
     button.addEventListener("click", () => {
       if (!state.quantitySku) return;
-      setQuantity(state.quantitySku, Number(button.dataset.quantity));
+      const item = state.cart[state.quantitySku];
+      const sku = item?.sku || state.quantitySku;
+      setQuantity(sku, Number(button.dataset.quantity), { isReturn: Boolean(item?.isReturn) });
       closeQuantitySheet();
     });
   });
 }
 
-function openQuantitySheet(sku) {
-  state.quantitySku = sku;
+function openQuantitySheet(cartKeyOrSku) {
+  const existing = state.cart[cartKeyOrSku];
+  const sku = existing?.sku || cartKeyOrSku;
+  state.quantitySku = cartKeyOrSku;
   const product = productBySku(sku);
   if (!product) return;
-  const quantity = Math.min(999, Math.max(0, state.cart[sku]?.quantity || 0));
+  const quantity = Math.min(999, Math.max(0, existing?.quantity || state.cart[sku]?.quantity || 0));
   document.getElementById("quantity-product-name").textContent = product.description || sku;
   document.getElementById("quantity-input").value = String(quantity);
   const select = document.getElementById("quantity-select");
@@ -548,7 +588,9 @@ function adjustQuantitySheet(delta) {
 
 function applyQuantitySheet() {
   if (!state.quantitySku) return;
-  setQuantity(state.quantitySku, Number(document.getElementById("quantity-input").value) || 0);
+  const item = state.cart[state.quantitySku];
+  const sku = item?.sku || state.quantitySku;
+  setQuantity(sku, Number(document.getElementById("quantity-input").value) || 0, { isReturn: Boolean(item?.isReturn) });
   closeQuantitySheet();
 }
 
@@ -558,7 +600,15 @@ function saveCart() {
 
 function cartItems() {
   return Object.entries(state.cart)
-    .map(([sku, item]) => ({ sku, quantity: Number(item.quantity) || 0, product: item.product, note: item.note || "" }))
+    .map(([cartKey, item]) => ({
+      cartKey,
+      sku: item.sku || cartKey.replace(/::return$/, ""),
+      quantity: Number(item.quantity) || 0,
+      product: item.product,
+      note: item.note || "",
+      isReturn: Boolean(item.isReturn || cartKey.endsWith("::return")),
+      isCarton: Boolean(item.isCarton),
+    }))
     .filter((item) => item.quantity > 0);
 }
 
@@ -598,27 +648,41 @@ function renderCart() {
             <strong>${escapeHtml(item.product?.description || item.sku)}</strong>
             <span>${money((item.product?.price || 0) * item.quantity)}</span>
           </div>
-          <small>כמות: ${integer(item.quantity)}</small>
-          <textarea class="cart-item-note" data-cart-note="${escapeHtml(item.sku)}" rows="1" placeholder="הערת מוצר">${escapeHtml(item.note || "")}</textarea>
+          <small>${item.isReturn ? "החזרה" : "כמות"}: ${integer(item.quantity)}${item.isCarton ? " קרטונים" : ""}</small>
+          <textarea class="cart-item-note" data-cart-note="${escapeHtml(item.cartKey)}" rows="1" placeholder="הערת מוצר">${escapeHtml(item.note || "")}</textarea>
         </div>
         <div class="cart-item-actions">
-          <button type="button" data-cart-minus="${escapeHtml(item.sku)}" aria-label="הפחתת כמות">−</button>
-          <button type="button" data-cart-picker="${escapeHtml(item.sku)}" aria-label="בחירת כמות">${integer(item.quantity)}</button>
-          <button type="button" data-cart-plus="${escapeHtml(item.sku)}" aria-label="הוספת כמות">+</button>
-          <button class="cart-remove" type="button" data-sku="${escapeHtml(item.sku)}" aria-label="הסרה">×</button>
+          <button type="button" data-cart-minus="${escapeHtml(item.cartKey)}" aria-label="הפחתת כמות">−</button>
+          <button type="button" data-cart-picker="${escapeHtml(item.cartKey)}" aria-label="בחירת כמות">${integer(item.quantity)}</button>
+          <button type="button" data-cart-plus="${escapeHtml(item.cartKey)}" aria-label="הוספת כמות">+</button>
+          <button class="cart-remove" type="button" data-sku="${escapeHtml(item.cartKey)}" aria-label="הסרה">×</button>
         </div>
       </div>
     `).join("");
-    list.querySelectorAll("[data-cart-minus]").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.cartMinus, (state.cart[button.dataset.cartMinus]?.quantity || 0) - 1)));
-    list.querySelectorAll("[data-cart-plus]").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.cartPlus, (state.cart[button.dataset.cartPlus]?.quantity || 0) + 1)));
+    list.querySelectorAll("[data-cart-minus]").forEach((button) => button.addEventListener("click", () => {
+      const item = state.cart[button.dataset.cartMinus];
+      if (item) setQuantity(item.sku, (item.quantity || 0) - 1, { isReturn: Boolean(item.isReturn) });
+    }));
+    list.querySelectorAll("[data-cart-plus]").forEach((button) => button.addEventListener("click", () => {
+      const item = state.cart[button.dataset.cartPlus];
+      if (item) setQuantity(item.sku, (item.quantity || 0) + 1, { isReturn: Boolean(item.isReturn) });
+    }));
     list.querySelectorAll("[data-cart-picker]").forEach((button) => button.addEventListener("click", () => openQuantitySheet(button.dataset.cartPicker)));
-    list.querySelectorAll(".cart-remove").forEach((button) => button.addEventListener("click", () => setQuantity(button.dataset.sku, 0)));
+    list.querySelectorAll(".cart-remove").forEach((button) => button.addEventListener("click", () => {
+      delete state.cart[button.dataset.sku];
+      saveCart();
+      renderCart();
+      renderProducts();
+    }));
     list.querySelectorAll("[data-cart-note]").forEach((textarea) => {
       textarea.addEventListener("input", () => updateItemNote(textarea.dataset.cartNote, textarea.value, false));
     });
   }
 
-  const subtotal = items.reduce((sum, item) => sum + ((Number(item.product?.price) || 0) * item.quantity), 0);
+  const subtotal = items.reduce((sum, item) => {
+    const sign = item.isReturn ? -1 : 1;
+    return sum + ((Number(item.product?.price) || 0) * item.quantity * sign);
+  }, 0);
   const unitCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const vat = subtotal * VAT_RATE;
   document.getElementById("summary-products-count").textContent = integer(items.length);
@@ -640,7 +704,7 @@ async function submitOrder() {
       method: "POST",
       body: JSON.stringify({
         note: document.getElementById("order-note").value.trim(),
-        items: items.map((item) => ({ sku: item.sku, quantity: item.quantity, note: item.note || "" })),
+        items: items.map((item) => ({ sku: item.sku, quantity: item.quantity, note: item.note || "", isReturn: item.isReturn, isCarton: item.isCarton })),
       }),
     });
     state.cart = {};

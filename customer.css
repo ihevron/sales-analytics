@@ -564,6 +564,22 @@ select:focus {
   color: var(--muted);
 }
 
+.carton-toggle {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.carton-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
 .item-note-input,
 .cart-item-note {
   min-height: 42px;
@@ -862,7 +878,7 @@ body.terms-open {
   }
 
   .catalog-nav {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .cart-panel {
@@ -928,7 +944,7 @@ body.terms-open {
   }
 
   .catalog-nav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
   }
 

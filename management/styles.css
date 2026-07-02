@@ -504,6 +504,33 @@ textarea { resize: vertical; }
   box-shadow: 0 8px 18px rgba(31, 127, 39, 0.18);
 }
 .primary-action:hover { background: var(--primary-dark); }
+.primary-action:disabled,
+.secondary-action:disabled,
+.danger-action:disabled,
+.small-action:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+.primary-action.loading {
+  position: relative;
+  padding-inline-start: 34px;
+}
+.primary-action.loading::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 12px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: button-spin 0.75s linear infinite;
+}
+@keyframes button-spin {
+  to { transform: rotate(360deg); }
+}
 .secondary-action, .small-action { color: var(--ink); border-color: var(--line); background: #fff; }
 .danger-action { color: #fff; background: var(--danger); }
 
@@ -2623,4 +2650,19 @@ td small {
   gap: 6px;
   max-width: 420px;
   font-weight: 850;
+}
+
+
+.product-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 32px;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+}
+
+tr.dragging {
+  opacity: 0.55;
 }

@@ -2731,14 +2731,31 @@ async function saveOrder() {
     acc.profit += signedUnits * number(item.estimated_profit_per_unit);
     return acc;
   }, { total: 0, profit: 0 });
+  if (state.serverSaveInProgress) return;
+  const saveButton = document.getElementById("order-save");
+  const originalSaveText = saveButton?.textContent || "";
   state.serverSaveInProgress = true;
-  const serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
-  state.serverSaveInProgress = false;
-  if (serverResult.ok) {
-    await reloadDatabaseFromServer();
-  } else {
-    alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשארה על המסך ולא נשמרה, כדי לא לדרוס נתונים ממחשב ישן.`);
-    return;
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.classList.add("loading");
+    saveButton.textContent = "משדר לשרת...";
+  }
+  let serverResult;
+  try {
+    serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
+    if (serverResult.ok) {
+      await reloadDatabaseFromServer();
+    } else {
+      alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשארה על המסך ולא נשמרה, כדי לא לדרוס נתונים ממחשב ישן.`);
+      return;
+    }
+  } finally {
+    state.serverSaveInProgress = false;
+    if (saveButton) {
+      saveButton.disabled = false;
+      saveButton.classList.remove("loading");
+      saveButton.textContent = originalSaveText;
+    }
   }
   alert(`הזמנה ${serverResult.orderId || ""} נשמרה`);
   resetOrder({ clearCustomer: true });
@@ -5699,6 +5716,7 @@ function renderCustomerAppProducts() {
   const category = document.getElementById("customer-app-product-category")?.value || "";
   const rows = queryRows(`
     SELECT p.sku, p.description, p.category, p.supplier, p.standard_cost,
+      COALESCE(p.display_order, 999999) AS display_order,
       p.base_price AS sale_price,
       COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
       COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
@@ -5710,10 +5728,13 @@ function renderCustomerAppProducts() {
     WHERE (p.sku LIKE ? OR p.description LIKE ?)
       AND (? = '' OR p.supplier = ?)
       AND (? = '' OR p.category = ?)
-    ORDER BY p.description ASC
+    ORDER BY COALESCE(p.display_order, 999999), p.description ASC
     LIMIT 700
   `, [query, query, supplier, supplier, category, category]);
   renderTable("customer-app-products-table", rows, [
+    { key: "reorder", label: "", sortable: false, render: (row) => `
+      <span class="drag-handle product-drag-handle" draggable="true" data-reorder-product="${escapeHtml(row.sku)}" title="גרירה לשינוי סדר">⋮⋮</span>
+    ` },
     { key: "select", label: '<input id="customer-app-select-all-products" class="table-check" type="checkbox" aria-label="בחר הכל" />', sortable: false, render: (row) => `
       <input class="table-check customer-app-product-check" type="checkbox" data-customer-app-product-select="${escapeHtml(row.sku)}" aria-label="בחר מוצר" />
     ` },
@@ -5733,7 +5754,7 @@ function renderCustomerAppProducts() {
       <button class="small-action" data-toggle-customer-app-recommended="${escapeHtml(row.sku)}">${number(row.customer_recommended) ? "בטל מומלץ" : "סמן מומלץ"}</button>
       <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">הגדרת מבצע</button>
     ` },
-  ], "customer-app-products", "description", "asc");
+  ], "customer-app-products", "display_order", "asc");
   const markSelectedRows = () => {
     document.querySelectorAll("#customer-app-products-table [data-customer-app-product-select]").forEach((checkbox) => {
       checkbox.closest("tr")?.classList.toggle("customer-app-row-selected", checkbox.checked);
@@ -5757,6 +5778,67 @@ function renderCustomerAppProducts() {
   document.querySelectorAll("#customer-app-products-table [data-edit-customer-app-promo]").forEach((button) => {
     button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
   });
+  bindCustomerAppProductReorder();
+}
+
+function bindCustomerAppProductReorder() {
+  const table = document.getElementById("customer-app-products-table");
+  if (!table) return;
+  table.querySelectorAll("[data-reorder-product]").forEach((handle) => {
+    handle.addEventListener("dragstart", (event) => {
+      event.dataTransfer?.setData("text/plain", handle.dataset.reorderProduct);
+      handle.closest("tr")?.classList.add("dragging");
+    });
+    handle.addEventListener("dragend", () => handle.closest("tr")?.classList.remove("dragging"));
+  });
+  table.querySelectorAll("tbody tr").forEach((row) => {
+    row.addEventListener("dragover", (event) => event.preventDefault());
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceSku = event.dataTransfer?.getData("text/plain");
+      const targetSku = row.querySelector("[data-reorder-product]")?.dataset.reorderProduct;
+      if (sourceSku && targetSku && sourceSku !== targetSku) reorderCustomerAppProduct(sourceSku, targetSku);
+    });
+  });
+}
+
+async function reorderCustomerAppProduct(sourceSku, targetSku) {
+  const handles = Array.from(document.querySelectorAll("#customer-app-products-table [data-reorder-product]"));
+  const skus = handles.map((handle) => handle.dataset.reorderProduct).filter(Boolean);
+  const sourceIndex = skus.indexOf(sourceSku);
+  const targetIndex = skus.indexOf(targetSku);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [moved] = skus.splice(sourceIndex, 1);
+  skus.splice(targetIndex, 0, moved);
+  const now = new Date().toISOString();
+  const rows = skus.map((sku, index) => ({ sku, display_order: (index + 1) * 10, updated_at: now }));
+  state.db.run("BEGIN TRANSACTION");
+  rows.forEach((row) => {
+    state.db.run("UPDATE products SET display_order = ?, updated_at = ? WHERE sku = ?", [row.display_order, row.updated_at, row.sku]);
+  });
+  state.db.run("COMMIT");
+  renderCustomerAppProducts();
+  const [persisted, postgres] = await Promise.all([
+    persistDatabase(),
+    updatePostgresProductOrder(rows),
+  ]);
+  if (!persisted.server.ok || postgres.ok === false) {
+    alert("סדר המוצרים נשמר בדפדפן, אבל לא סונכרן במלואו לשרת. יש לבדוק חיבור ולנסות שוב.");
+  }
+}
+
+async function updatePostgresProductOrder(rows) {
+  try {
+    const response = await fetch("/api/postgres/products-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok && data.ok !== false, ...data };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
 }
 
 function selectedCustomerAppProductSkus() {

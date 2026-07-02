@@ -677,6 +677,34 @@ async function existingPostgresProductImages(skus) {
   return images;
 }
 
+async function handlePostgresProductOrder(payload, res) {
+  if (!requirePostgres(res)) return;
+  const rows = Array.isArray(payload?.rows) ? payload.rows
+    .map((row) => ({
+      sku: String(row?.sku || "").trim(),
+      display_order: numberValue(row?.display_order) || 999999,
+      updated_at: String(row?.updated_at || new Date().toISOString()),
+    }))
+    .filter((row) => row.sku) : [];
+  if (!rows.length) {
+    sendJson(res, 400, { ok: false, error: "rows are required" });
+    return;
+  }
+  const results = [];
+  for (const row of rows) {
+    try {
+      await postgresPatch("products", `sku=eq.${encodeURIComponent(row.sku)}`, {
+        display_order: row.display_order,
+        updated_at: row.updated_at,
+      });
+      results.push({ sku: row.sku, ok: true });
+    } catch (error) {
+      results.push({ sku: row.sku, ok: false, error: error.message || "product order update failed" });
+    }
+  }
+  sendJson(res, 200, { ok: results.every((item) => item.ok), updated: results.filter((item) => item.ok).length, results });
+}
+
 async function handlePostgresProductSettings(payload, res) {
   if (!requirePostgres(res)) return;
   const skus = Array.isArray(payload.skus) ? payload.skus.map((sku) => String(sku || "").trim()).filter(Boolean) : [];
@@ -2365,13 +2393,20 @@ async function handleCustomerProducts(req, res) {
       settingsSelect("hidden", columns.has("hidden") ? "p.hidden" : "0"),
       settingsSelect("customer_recommended", columns.has("customer_recommended") ? "p.customer_recommended" : "0"),
       "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
+      "COALESCE(ru.recent_customer_quantity, 0) AS recent_customer_quantity",
       "COALESCE(gu.global_quantity, 0) AS global_quantity",
     ].join(", ");
     const hasCustomerSummary = tableExists(db, "customer_product_summary");
     const hasSalesRaw = tableExists(db, "sales_raw");
+    const returnsStart = new Date();
+    returnsStart.setFullYear(returnsStart.getFullYear() - 1);
+    const returnsStartDate = returnsStart.toISOString().slice(0, 10);
     const customerUsage = hasCustomerSummary
       ? "SELECT sku, SUM(quantity) AS customer_quantity FROM customer_product_summary WHERE customer_no = ? GROUP BY sku"
       : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS customer_quantity FROM sales_raw WHERE customer_no = ? GROUP BY sku" : "SELECT '' AS sku, 0 AS customer_quantity WHERE 0");
+    const recentUsage = hasSalesRaw
+      ? "SELECT sku, SUM(quantity) AS recent_customer_quantity FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
+      : "SELECT '' AS sku, 0 AS recent_customer_quantity WHERE 0";
     const globalUsage = hasCustomerSummary
       ? "SELECT sku, SUM(quantity) AS global_quantity FROM customer_product_summary GROUP BY sku"
       : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS global_quantity FROM sales_raw GROUP BY sku" : "SELECT '' AS sku, 0 AS global_quantity WHERE 0");
@@ -2380,10 +2415,14 @@ async function handleCustomerProducts(req, res) {
       FROM products p
       ${hasProductSettings ? "LEFT JOIN product_customer_settings pcs ON pcs.sku = p.sku" : ""}
       LEFT JOIN (${customerUsage}) cu ON cu.sku = p.sku
+      LEFT JOIN (${recentUsage}) ru ON ru.sku = p.sku
       LEFT JOIN (${globalUsage}) gu ON gu.sku = p.sku
       ORDER BY COALESCE(cu.customer_quantity, 0) DESC, COALESCE(gu.global_quantity, 0) DESC, p.description ASC
       LIMIT 3000
-    `, hasCustomerSummary || hasSalesRaw ? [session.customer_no] : []);
+    `, [
+      ...((hasCustomerSummary || hasSalesRaw) ? [session.customer_no] : []),
+      ...(hasSalesRaw ? [session.customer_no, returnsStartDate] : []),
+    ]);
     const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);
     const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const rankBySku = new Map(visibleProducts
@@ -2430,6 +2469,8 @@ async function handleCustomerProducts(req, res) {
       sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
     } else if (section === "deals") {
       sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
+    } else if (section === "returns") {
+      sourceRows = sortProducts(baseRows.filter((row) => numberValue(row.recent_customer_quantity) > 0));
     } else {
       sourceRows = sortProducts(baseRows);
     }
@@ -2477,13 +2518,18 @@ async function handleCustomerOrder(payload, req, res) {
   }
 
   const inputItems = Array.isArray(payload?.items) ? payload.items.slice(0, 200) : [];
-  const quantities = new Map(inputItems
-    .map((item) => [String(item?.sku || "").trim(), numberValue(item?.quantity)])
-    .filter(([sku, quantity]) => sku && quantity > 0));
-  const itemNotes = new Map(inputItems
-    .map((item) => [String(item?.sku || "").trim(), String(item?.note || "").trim()])
-    .filter(([sku]) => sku));
-  if (!quantities.size) {
+  const normalizedItems = inputItems
+    .map((item, index) => ({
+      sku: String(item?.sku || "").trim(),
+      quantity: numberValue(item?.quantity),
+      note: String(item?.note || "").trim(),
+      isReturn: Boolean(item?.isReturn),
+      isCarton: Boolean(item?.isCarton),
+      inputIndex: index,
+    }))
+    .filter((item) => item.sku && item.quantity > 0);
+  const quantities = new Map(normalizedItems.map((item) => [item.sku, item.quantity]));
+  if (!normalizedItems.length) {
     sendJson(res, 400, { ok: false, error: "empty order" });
     return;
   }
@@ -2511,27 +2557,29 @@ async function handleCustomerOrder(payload, req, res) {
       columns.has("promo_discount_percent") ? "promo_discount_percent" : "0 AS promo_discount_percent",
       columns.has("units_per_carton") ? "units_per_carton" : "1 AS units_per_carton",
     ].join(", ");
-    const placeholders = [...quantities.keys()].map(() => "?").join(",");
-    return sqliteRows(db, `SELECT ${select} FROM products WHERE sku IN (${placeholders})`, [...quantities.keys()]);
+    const skus = [...new Set(normalizedItems.map((item) => item.sku))];
+    const placeholders = skus.map(() => "?").join(",");
+    return sqliteRows(db, `SELECT ${select} FROM products WHERE sku IN (${placeholders})`, skus);
   });
   const bySku = new Map(products.map((product) => [String(product.sku || ""), product]));
-  const orderItems = [...quantities.entries()].map(([sku, quantity], index) => {
-    const product = bySku.get(sku) || { sku, description: sku };
+  const orderItems = normalizedItems.map((item, index) => {
+    const product = bySku.get(item.sku) || { sku: item.sku, description: item.sku };
     const price = productPrice(product);
     const unitCost = numberValue(product.standard_cost);
-    const notes = [itemNotes.get(sku), productPromoNote(product)].filter(Boolean).join(" | ");
+    const notes = [item.note, item.isReturn ? "החזרה מאזור לקוח" : "", productPromoNote(product)].filter(Boolean).join(" | ");
+    const signedQuantity = item.isReturn ? -item.quantity : item.quantity;
     return {
-      sku,
-      product_desc: String(product.description || sku),
-      quantity,
-      picked_quantity: 0,
+      sku: item.sku,
+      product_desc: String(product.description || item.sku),
+      quantity: item.quantity,
+      picked_quantity: item.isReturn ? item.quantity : 0,
       note: notes,
-      item_status: "pending",
+      item_status: item.isReturn ? "return" : "pending",
       entry_sequence: index + 1,
-      is_carton: 0,
+      is_carton: item.isCarton ? 1 : 0,
       units_per_carton: numberValue(product.units_per_carton) || 1,
-      estimated_price: price * quantity,
-      estimated_profit: Math.max(0, (price - unitCost) * quantity),
+      estimated_price: price * signedQuantity,
+      estimated_profit: (price - unitCost) * signedQuantity,
     };
   });
   const subtotal = orderItems.reduce((sum, item) => sum + numberValue(item.estimated_price), 0);
@@ -2752,6 +2800,14 @@ const server = http.createServer((req, res) => {
       console.error(error);
       sendJson(res, 500, { ok: false, error: error.message || "postgres product filters failed" });
     });
+    return;
+  }
+
+  if (requestPath === "/api/postgres/products-order" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => handlePostgresProductOrder(payload, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "postgres product order failed" });
+    }));
     return;
   }
 
