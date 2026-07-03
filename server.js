@@ -2327,12 +2327,11 @@ function productListPrice(row) {
 function productPromoPrice(row) {
   const listPrice = productListPrice(row);
   const explicitSalePrice = numberValue(row.sale_price);
-  if (explicitSalePrice > 0) return explicitSalePrice;
+  if (explicitSalePrice > 0 && listPrice > 0 && explicitSalePrice < listPrice) return explicitSalePrice;
 
   const discountPercent = numberValue(row.promo_discount_percent);
-  if (discountPercent > 0 && listPrice > 0) {
-    return Math.max(0, listPrice * (1 - discountPercent / 100));
-  }
+  if (discountPercent > 0 && listPrice > 0) return Math.max(0, listPrice * (1 - discountPercent / 100));
+
   return 0;
 }
 
@@ -2341,8 +2340,11 @@ function productPrice(row) {
 }
 
 function productPromoNote(row) {
+  const listPrice = productListPrice(row);
   const explicitSalePrice = numberValue(row.sale_price);
-  if (explicitSalePrice > 0) return `מבצע: מחיר ${explicitSalePrice.toFixed(2)}`;
+  if (explicitSalePrice > 0 && listPrice > 0 && explicitSalePrice < listPrice) {
+    return `מבצע: מחיר ${explicitSalePrice.toFixed(2)}`;
+  }
   const discountPercent = numberValue(row.promo_discount_percent);
   return discountPercent > 0 ? `מבצע: ${discountPercent}% הנחה` : "";
 }
@@ -2468,7 +2470,7 @@ async function handleCustomerProducts(req, res) {
         .sort(compareByDisplayOrder);
       sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
     } else if (section === "deals") {
-      sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
+      sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0 || numberValue(row.customer_recommended) > 0));
     } else if (section === "returns") {
       sourceRows = sortProducts(baseRows.filter((row) => numberValue(row.recent_customer_quantity) > 0));
     } else {

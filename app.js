@@ -391,6 +391,7 @@ function importSalesRows(rows) {
   `);
   state.db.run("BEGIN TRANSACTION");
   state.db.run("DELETE FROM sales_raw");
+  state.db.run("DELETE FROM app_metadata WHERE key = 'shift_month_data_forward_v2'");
   rows.forEach((row) => {
     const mapped = mapRow(row, salesColumns);
     if (!mapped.customer_no && !mapped.customer_name && !mapped.sku) return;
@@ -1086,7 +1087,9 @@ function latestSalesMonthEnd() {
   const row = firstRow("SELECT MAX(sale_date) AS max_date FROM sales_raw");
   const maxDate = parseDate(row.max_date);
   if (!maxDate) return firstDayOfCurrentMonth();
-  return addMonths(new Date(maxDate.getFullYear(), maxDate.getMonth(), 1), 1);
+  const [year, month] = String(maxDate).split("-").map(Number);
+  if (!year || !month) return firstDayOfCurrentMonth();
+  return addMonths(new Date(year, month - 1, 1), 1);
 }
 
 function currentInclusiveRange(months) {

@@ -631,6 +631,17 @@ function closeCart() {
   document.getElementById("cart-backdrop").hidden = true;
 }
 
+const RETURN_POLICY_WARNING = "סך ההחזרות גבוה מ-10%, בהתאם לתנאי הסחר ותנאי השימוש החברה רשאית שלא לזכות את כל החזרות או לזכות ב-50% בהתאם לשיקול דעתה.";
+
+function returnPolicyWarning(items = cartItems()) {
+  const orderedUnits = items.filter((item) => !item.isReturn).reduce((sum, item) => sum + item.quantity, 0);
+  const returnUnits = items.filter((item) => item.isReturn).reduce((sum, item) => sum + item.quantity, 0);
+  if (returnUnits > 0 && (orderedUnits <= 0 || returnUnits > orderedUnits * 0.1)) {
+    return RETURN_POLICY_WARNING;
+  }
+  return "";
+}
+
 function renderCart() {
   const items = cartItems();
   const list = document.getElementById("cart-list");
@@ -685,6 +696,14 @@ function renderCart() {
   }, 0);
   const unitCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const vat = subtotal * VAT_RATE;
+  const warning = returnPolicyWarning(items);
+  const message = document.getElementById("order-message");
+  if (warning && !message.textContent) {
+    message.style.color = "#b45309";
+    message.textContent = warning;
+  } else if (!warning && message.style.color === "rgb(180, 83, 9)") {
+    message.textContent = "";
+  }
   document.getElementById("summary-products-count").textContent = integer(items.length);
   document.getElementById("summary-units-count").textContent = integer(unitCount);
   document.getElementById("subtotal").textContent = money(subtotal);
@@ -696,6 +715,8 @@ async function submitOrder() {
   const items = cartItems();
   if (!items.length) return;
   const message = document.getElementById("order-message");
+  const warning = returnPolicyWarning(items);
+  if (warning) alert(warning);
   const button = document.getElementById("submit-order");
   message.textContent = "שולח הזמנה...";
   button.disabled = true;

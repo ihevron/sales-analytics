@@ -245,7 +245,63 @@ async function initDatabase() {
   createSharedSchema();
   createManagementSchema();
   ensureSummaryTables();
+  const repairedDates = repairShiftedMonthData();
   if (!saved?.data) seedRecommendations();
+  if (repairedDates || saved?.source === "browser") {
+    rebuildSummaryTables();
+    await persistDatabase();
+  }
+}
+
+function repairShiftedMonthData() {
+  const repairKey = "shift_month_data_forward_v2";
+  const repaired = firstRow("SELECT value FROM app_metadata WHERE key = ?", [repairKey]);
+  if (repaired.value === "done") return false;
+
+  const now = firstDayOfCurrentMonth();
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const monthBeforePreviousStart = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  const currentMonth = monthKey(now);
+  const previousMonth = monthKey(previousMonthStart);
+  const monthBeforePrevious = monthKey(monthBeforePreviousStart);
+  const stats = firstRow(`
+    SELECT
+      MAX(CASE WHEN SUBSTR(sale_date, 1, 7) < ? THEN SUBSTR(sale_date, 1, 7) ELSE NULL END) AS max_completed_month,
+      SUM(CASE WHEN SUBSTR(sale_date, 1, 7) = ? THEN 1 ELSE 0 END) AS previous_month_rows,
+      SUM(CASE WHEN SUBSTR(sale_date, 1, 7) = ? THEN 1 ELSE 0 END) AS month_before_previous_rows
+    FROM sales_raw
+  `, [currentMonth, previousMonth, monthBeforePrevious]);
+
+  if (
+    text(stats.max_completed_month) === monthBeforePrevious &&
+    number(stats.previous_month_rows) === 0 &&
+    number(stats.month_before_previous_rows) > 0
+  ) {
+    state.db.run("BEGIN TRANSACTION");
+    state.db.run(`
+      UPDATE sales_raw
+      SET sale_date = DATE(SUBSTR(sale_date, 1, 7) || '-01', '+1 month')
+      WHERE sale_date < ?
+    `, [toSqlDate(now)]);
+    state.db.run(`
+      INSERT INTO app_metadata (key, value)
+      VALUES (?, 'done')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `, [repairKey]);
+    state.db.run("COMMIT");
+    return true;
+  }
+
+  state.db.run(`
+    INSERT INTO app_metadata (key, value)
+    VALUES (?, 'done')
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `, [repairKey]);
+  return false;
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function ensureSummaryTables() {
@@ -804,7 +860,10 @@ async function importFile(event, type) {
     const rows = await readWorkbook(file);
     setStatus("מרענן בסיס נתונים לפני ייבוא");
     await reloadDatabaseFromServer();
-    if (type === "sales") importSalesRows(rows);
+    if (type === "sales") {
+      importSalesRows(rows);
+      repairShiftedMonthData();
+    }
     if (type === "products") {
       const importedProducts = importProductRows(rows);
       await importProductsToPostgres(importedProducts);
@@ -900,6 +959,7 @@ function importSalesRows(rows) {
   `);
   state.db.run("BEGIN TRANSACTION");
   state.db.run("DELETE FROM sales_raw");
+  state.db.run("DELETE FROM app_metadata WHERE key = 'shift_month_data_forward_v2'");
   rows.forEach((row) => {
     const mapped = mapRow(row, salesColumns);
     if (!mapped.customer_no && !mapped.customer_name && !mapped.sku) return;
@@ -5732,9 +5792,6 @@ function renderCustomerAppProducts() {
     LIMIT 700
   `, [query, query, supplier, supplier, category, category]);
   renderTable("customer-app-products-table", rows, [
-    { key: "reorder", label: "", sortable: false, render: (row) => `
-      <span class="drag-handle product-drag-handle" draggable="true" data-reorder-product="${escapeHtml(row.sku)}" title="גרירה לשינוי סדר">⋮⋮</span>
-    ` },
     { key: "select", label: '<input id="customer-app-select-all-products" class="table-check" type="checkbox" aria-label="בחר הכל" />', sortable: false, render: (row) => `
       <input class="table-check customer-app-product-check" type="checkbox" data-customer-app-product-select="${escapeHtml(row.sku)}" aria-label="בחר מוצר" />
     ` },
@@ -5778,67 +5835,6 @@ function renderCustomerAppProducts() {
   document.querySelectorAll("#customer-app-products-table [data-edit-customer-app-promo]").forEach((button) => {
     button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
   });
-  bindCustomerAppProductReorder();
-}
-
-function bindCustomerAppProductReorder() {
-  const table = document.getElementById("customer-app-products-table");
-  if (!table) return;
-  table.querySelectorAll("[data-reorder-product]").forEach((handle) => {
-    handle.addEventListener("dragstart", (event) => {
-      event.dataTransfer?.setData("text/plain", handle.dataset.reorderProduct);
-      handle.closest("tr")?.classList.add("dragging");
-    });
-    handle.addEventListener("dragend", () => handle.closest("tr")?.classList.remove("dragging"));
-  });
-  table.querySelectorAll("tbody tr").forEach((row) => {
-    row.addEventListener("dragover", (event) => event.preventDefault());
-    row.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const sourceSku = event.dataTransfer?.getData("text/plain");
-      const targetSku = row.querySelector("[data-reorder-product]")?.dataset.reorderProduct;
-      if (sourceSku && targetSku && sourceSku !== targetSku) reorderCustomerAppProduct(sourceSku, targetSku);
-    });
-  });
-}
-
-async function reorderCustomerAppProduct(sourceSku, targetSku) {
-  const handles = Array.from(document.querySelectorAll("#customer-app-products-table [data-reorder-product]"));
-  const skus = handles.map((handle) => handle.dataset.reorderProduct).filter(Boolean);
-  const sourceIndex = skus.indexOf(sourceSku);
-  const targetIndex = skus.indexOf(targetSku);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-  const [moved] = skus.splice(sourceIndex, 1);
-  skus.splice(targetIndex, 0, moved);
-  const now = new Date().toISOString();
-  const rows = skus.map((sku, index) => ({ sku, display_order: (index + 1) * 10, updated_at: now }));
-  state.db.run("BEGIN TRANSACTION");
-  rows.forEach((row) => {
-    state.db.run("UPDATE products SET display_order = ?, updated_at = ? WHERE sku = ?", [row.display_order, row.updated_at, row.sku]);
-  });
-  state.db.run("COMMIT");
-  renderCustomerAppProducts();
-  const [persisted, postgres] = await Promise.all([
-    persistDatabase(),
-    updatePostgresProductOrder(rows),
-  ]);
-  if (!persisted.server.ok || postgres.ok === false) {
-    alert("סדר המוצרים נשמר בדפדפן, אבל לא סונכרן במלואו לשרת. יש לבדוק חיבור ולנסות שוב.");
-  }
-}
-
-async function updatePostgresProductOrder(rows) {
-  try {
-    const response = await fetch("/api/postgres/products-order", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows }),
-    });
-    const data = await response.json().catch(() => ({}));
-    return { ok: response.ok && data.ok !== false, ...data };
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
 }
 
 function selectedCustomerAppProductSkus() {
@@ -6079,9 +6075,18 @@ function fullDateDisplay(value) {
 }
 
 function dateRange(months) {
-  const end = firstDayOfCurrentMonth();
+  const end = latestSalesMonthEnd();
   const start = new Date(end.getFullYear(), end.getMonth() - months, 1);
   return { start: toSqlDate(start), end: toSqlDate(end) };
+}
+
+function latestSalesMonthEnd() {
+  const row = firstRow("SELECT MAX(sale_date) AS max_date FROM sales_raw");
+  const maxDate = parseDate(row.max_date);
+  if (!maxDate) return firstDayOfCurrentMonth();
+  const [year, month] = String(maxDate).split("-").map(Number);
+  if (!year || !month) return firstDayOfCurrentMonth();
+  return new Date(year, month, 1);
 }
 
 function firstDayOfCurrentMonth() {

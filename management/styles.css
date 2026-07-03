@@ -2653,16 +2653,3 @@ td small {
 }
 
 
-.product-drag-handle {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 32px;
-  color: var(--muted);
-  cursor: grab;
-  user-select: none;
-}
-
-tr.dragging {
-  opacity: 0.55;
-}
