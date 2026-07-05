@@ -1127,6 +1127,11 @@ async function updatePostgresProductSettings(skus, values) {
   }
 }
 
+function customerSettingsSyncOk(postgres, server) {
+  if (postgres?.configured === false) return Boolean(server?.ok);
+  return postgres?.ok !== false;
+}
+
 async function importCallCustomersFile(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -5554,7 +5559,7 @@ async function saveCustomerAppPromo(clearPromo = false) {
     persistDatabase(),
     updatePostgresProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended, updated_at: updatedAt }),
   ]);
-  status.textContent = result.server.ok && postgres.ok !== false
+  status.textContent = customerSettingsSyncOk(postgres, result.server)
     ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר")
     : "המבצע נשמר מקומית, אך הסנכרון לשרת לא הושלם";
   document.getElementById("customer-app-promo-sku").value = sku;
@@ -5648,7 +5653,7 @@ async function resetCustomerAppPromotions() {
     persistDatabase(),
     updatePostgresProductSettings(skus, { sale_price: 0, promo_discount_percent: 0, updated_at: new Date().toISOString() }),
   ]);
-  document.getElementById("customer-app-promo-status").textContent = result.server.ok && postgres.ok !== false ? "כל המבצעים אופסו" : "המבצעים אופסו מקומית, אך הסנכרון לשרת לא הושלם";
+  document.getElementById("customer-app-promo-status").textContent = customerSettingsSyncOk(postgres, result.server) ? "כל המבצעים אופסו" : "המבצעים אופסו מקומית, אך הסנכרון לשרת לא הושלם";
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
 }
