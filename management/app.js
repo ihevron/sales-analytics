@@ -3522,6 +3522,7 @@ async function completePickingOrder(orderId) {
   state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["מלקט", now, now, orderId]);
   queuePickingChange({ type: "completeOrder", orderId, pickedBy: "מלקט", pickedAt: now, updatedAt: now });
   await savePickingNow();
+  state.forceSqliteOrderHistoryUntil = Date.now() + 2 * 60 * 1000;
   renderPicking();
   renderOrderHistory();
 }
@@ -3545,6 +3546,7 @@ async function manualCompletePickingOrder(orderId) {
   }));
   queuePickingChange({ type: "completeOrder", orderId, pickedBy: "ליקוט ידני", pickedAt: now, updatedAt: now });
   await savePickingNow();
+  state.forceSqliteOrderHistoryUntil = Date.now() + 2 * 60 * 1000;
   state.processTab = "orders";
   renderPicking();
   renderOrderHistory();
