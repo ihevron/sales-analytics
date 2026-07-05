@@ -1132,6 +1132,21 @@ function customerSettingsSyncOk(postgres, server) {
   return postgres?.ok !== false;
 }
 
+async function persistCustomerProductSettings(skus, values) {
+  const data = state.db.export();
+  const [, postgres] = await Promise.all([
+    writeBrowserDatabase(data),
+    updatePostgresProductSettings(skus, values),
+  ]);
+  if (postgres?.configured === false) {
+    const server = await writeServerDatabase(data);
+    updateServerSaveStatus(server);
+    return { server, postgres };
+  }
+  updateServerSaveStatus({ ok: true, skipped: true });
+  return { server: { ok: true, skipped: true, localOnly: true }, postgres };
+}
+
 async function importCallCustomersFile(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -5557,11 +5572,8 @@ async function saveCustomerAppPromo(clearPromo = false) {
   `, [promoPrice, promoDiscount, customerRecommended, new Date().toISOString(), sku]);
   const updatedAt = new Date().toISOString();
   saveProductCustomerSetting(sku, { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended });
-  const [result, postgres] = await Promise.all([
-    persistDatabase(),
-    updatePostgresProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended, updated_at: updatedAt }),
-  ]);
-  status.textContent = customerSettingsSyncOk(postgres, result.server)
+  const sync = await persistCustomerProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended, updated_at: updatedAt });
+  status.textContent = customerSettingsSyncOk(sync.postgres, sync.server)
     ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר")
     : "המבצע נשמר מקומית, אך הסנכרון לשרת לא הושלם";
   document.getElementById("customer-app-promo-sku").value = sku;
@@ -5651,11 +5663,8 @@ async function resetCustomerAppPromotions() {
   ensureProductCustomerSettings();
   state.db.run("UPDATE product_customer_settings SET sale_price = 0, promo_discount_percent = 0, updated_at = ?", [new Date().toISOString()]);
   const skus = queryRows("SELECT sku FROM products WHERE COALESCE(TRIM(sku), '') <> ''").map((row) => String(row.sku || ""));
-  const [result, postgres] = await Promise.all([
-    persistDatabase(),
-    updatePostgresProductSettings(skus, { sale_price: 0, promo_discount_percent: 0, updated_at: new Date().toISOString() }),
-  ]);
-  document.getElementById("customer-app-promo-status").textContent = customerSettingsSyncOk(postgres, result.server) ? "כל המבצעים אופסו" : "המבצעים אופסו מקומית, אך הסנכרון לשרת לא הושלם";
+  const sync = await persistCustomerProductSettings(skus, { sale_price: 0, promo_discount_percent: 0, updated_at: new Date().toISOString() });
+  document.getElementById("customer-app-promo-status").textContent = customerSettingsSyncOk(sync.postgres, sync.server) ? "כל המבצעים אופסו" : "המבצעים אופסו מקומית, אך הסנכרון לשרת לא הושלם";
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
 }
@@ -5690,10 +5699,7 @@ async function removeCustomerAppRecommendedProduct(sku) {
   const updatedAt = new Date().toISOString();
   state.db.run("UPDATE products SET customer_recommended = 0, updated_at = ? WHERE sku = ?", [updatedAt, sku]);
   saveProductCustomerSetting(sku, { customer_recommended: 0 });
-  await Promise.all([
-    persistDatabase(),
-    updatePostgresProductSettings([sku], { customer_recommended: 0, updated_at: updatedAt }),
-  ]);
+  await persistCustomerProductSettings([sku], { customer_recommended: 0, updated_at: updatedAt });
   if (document.getElementById("customer-app-promo-sku").value === sku) {
     document.getElementById("customer-app-promo-recommended").checked = false;
   }
@@ -5947,11 +5953,8 @@ async function setCustomerAppProductsHidden(skus, hidden) {
     ...skus,
   ]);
   skus.forEach((sku) => saveProductCustomerSetting(sku, { hidden: hidden ? 1 : 0 }));
-  const [persisted, postgres] = await Promise.all([
-    persistDatabase(),
-    updatePostgresProductSettings(skus, { hidden: hidden ? 1 : 0, updated_at: new Date().toISOString() }),
-  ]);
-  if (persisted.server.ok && postgres.ok === false) {
+  const sync = await persistCustomerProductSettings(skus, { hidden: hidden ? 1 : 0, updated_at: new Date().toISOString() });
+  if (sync.server.ok && sync.postgres.ok === false) {
     alert("ההסתרה נשמרה בקובץ הנתונים, אבל לא נשמרה ב-Supabase. בייבוא הבא ייתכן שיהיה צורך להסתיר שוב.");
   }
   renderCustomerAppProducts();
@@ -5973,10 +5976,7 @@ async function toggleCustomerAppProductRecommended(sku) {
     sku,
   ]);
   saveProductCustomerSetting(sku, { customer_recommended: nextRecommended });
-  await Promise.all([
-    persistDatabase(),
-    updatePostgresProductSettings([sku], { customer_recommended: nextRecommended, updated_at: new Date().toISOString() }),
-  ]);
+  await persistCustomerProductSettings([sku], { customer_recommended: nextRecommended, updated_at: new Date().toISOString() });
   renderCustomerAppPromotions();
   renderCustomerAppProducts();
 }
