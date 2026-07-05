@@ -659,7 +659,6 @@ function bindEvents() {
   document.getElementById("save-customer-app-settings").addEventListener("click", saveCustomerAppSettings);
   document.getElementById("save-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(false));
   document.getElementById("clear-customer-app-promo").addEventListener("click", () => saveCustomerAppPromo(true));
-  document.getElementById("reset-customer-app-promos").addEventListener("click", resetCustomerAppPromotions);
   document.getElementById("customer-app-promo-product-query").addEventListener("input", handleCustomerAppPromoProductInput);
   document.getElementById("customer-app-promo-product-query").addEventListener("focus", (event) => event.target.select());
   document.getElementById("load-customer-app-customer").addEventListener("click", loadCustomerAppCustomer);
@@ -5414,6 +5413,7 @@ function showCustomerAppTab(tab) {
   if (tab === "promotions") {
     refreshCustomerAppProductOptions();
     renderCustomerAppPromotions();
+    renderCustomerAppRecommendedProducts();
   }
 }
 
@@ -5455,31 +5455,26 @@ function renderCustomerAppPromotions() {
   ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
   ensureProductCustomerSettings();
   const rows = queryRows(`
-    SELECT p.sku, p.description, p.supplier, p.category, p.base_price AS sale_price,
+    SELECT p.sku, p.description, p.standard_cost, p.base_price AS sale_price,
       COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
       COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
-      COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended,
       COALESCE(s.updated_at, p.updated_at) AS updated_at
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
     WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0
       OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
-      OR COALESCE(s.customer_recommended, p.customer_recommended, 0) > 0
     ORDER BY updated_at DESC, p.description ASC
-    LIMIT 50
+    LIMIT 200
   `);
   renderTable("customer-app-promotions-table", rows, [
     { key: "sku", label: "מק״ט" },
     { key: "description", label: "מוצר" },
-    { key: "supplier", label: "ספק" },
-    { key: "category", label: "קטגוריה" },
+    { key: "standard_cost", label: "מחיר קניה", format: currency2 },
     { key: "sale_price", label: "מחיר מכירה", format: currency2 },
     { key: "promo_price", label: "מחיר מבצע", format: currency2 },
     { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
-    { key: "customer_recommended", label: "מומלץ", render: (row) => recommendationStateLabel(row.customer_recommended) },
     { key: "actions", label: "פעולות", sortable: false, render: (row) => `
       <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">עריכה</button>
-      <button class="small-action" data-toggle-customer-app-recommended="${escapeHtml(row.sku)}">${number(row.customer_recommended) ? "בטל מומלץ" : "סמן מומלץ"}</button>
       <button class="danger-action" data-remove-customer-app-promo="${escapeHtml(row.sku)}">הסרה</button>
     ` },
   ], "customer-app-promotions", "description", "asc");
@@ -5489,8 +5484,39 @@ function renderCustomerAppPromotions() {
   document.querySelectorAll("[data-remove-customer-app-promo]").forEach((button) => {
     button.addEventListener("click", () => removeCustomerAppPromotion(button.dataset.removeCustomerAppPromo));
   });
-  document.querySelectorAll("[data-toggle-customer-app-recommended]").forEach((button) => {
-    button.addEventListener("click", () => toggleCustomerAppProductRecommended(button.dataset.toggleCustomerAppRecommended));
+}
+
+function renderCustomerAppRecommendedProducts() {
+  const table = document.getElementById("customer-app-recommended-table");
+  if (!table) return;
+  ensureColumn("products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+  ensureProductCustomerSettings();
+  const rows = queryRows(`
+    SELECT p.sku, p.description, p.standard_cost, p.base_price AS sale_price,
+      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE COALESCE(s.customer_recommended, p.customer_recommended, 0) > 0
+    ORDER BY p.description ASC
+  `);
+  renderTable("customer-app-recommended-table", rows, [
+    { key: "sku", label: "מק״ט" },
+    { key: "description", label: "מוצר" },
+    { key: "standard_cost", label: "מחיר קניה", format: currency2 },
+    { key: "sale_price", label: "מחיר מכירה", format: currency2 },
+    { key: "promo_price", label: "מחיר מבצע", format: currency2 },
+    { key: "promo_discount_percent", label: "% הנחה", format: discountPercentDisplay },
+    { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action" data-edit-customer-app-promo="${escapeHtml(row.sku)}">עריכה</button>
+      <button class="danger-action" data-remove-customer-app-recommended="${escapeHtml(row.sku)}">מחיקה</button>
+    ` },
+  ], "customer-app-recommended", "description", "asc");
+  document.querySelectorAll("[data-edit-customer-app-promo]").forEach((button) => {
+    button.addEventListener("click", () => editCustomerAppPromo(button.dataset.editCustomerAppPromo));
+  });
+  document.querySelectorAll("[data-remove-customer-app-recommended]").forEach((button) => {
+    button.addEventListener("click", () => removeCustomerAppRecommendedProduct(button.dataset.removeCustomerAppRecommended));
   });
 }
 
@@ -5509,22 +5535,31 @@ async function saveCustomerAppPromo(clearPromo = false) {
   }
   const promoPrice = clearPromo ? 0 : number(document.getElementById("customer-app-promo-price").value);
   const promoDiscount = clearPromo ? 0 : number(document.getElementById("customer-app-promo-discount").value);
+  const recommendedInput = document.getElementById("customer-app-promo-recommended");
+  const existingSettings = firstRow(`
+    SELECT COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
+    FROM products p
+    LEFT JOIN product_customer_settings s ON s.sku = p.sku
+    WHERE p.sku = ?
+  `, [sku]);
+  const customerRecommended = clearPromo ? (number(existingSettings.customer_recommended) ? 1 : 0) : (recommendedInput?.checked ? 1 : 0);
   state.db.run(`
     UPDATE products
-    SET sale_price = ?, promo_discount_percent = ?, updated_at = ?
+    SET sale_price = ?, promo_discount_percent = ?, customer_recommended = ?, updated_at = ?
     WHERE sku = ?
-  `, [promoPrice, promoDiscount, new Date().toISOString(), sku]);
+  `, [promoPrice, promoDiscount, customerRecommended, new Date().toISOString(), sku]);
   const updatedAt = new Date().toISOString();
-  saveProductCustomerSetting(sku, { sale_price: promoPrice, promo_discount_percent: promoDiscount });
+  saveProductCustomerSetting(sku, { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended });
   const [result, postgres] = await Promise.all([
     persistDatabase(),
-    updatePostgresProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, updated_at: updatedAt }),
+    updatePostgresProductSettings([sku], { sale_price: promoPrice, promo_discount_percent: promoDiscount, customer_recommended: customerRecommended, updated_at: updatedAt }),
   ]);
   status.textContent = result.server.ok && postgres.ok !== false
     ? (clearPromo ? "המבצע נוקה" : "המבצע נשמר")
     : "המבצע נשמר מקומית, אך הסנכרון לשרת לא הושלם";
   document.getElementById("customer-app-promo-sku").value = sku;
   renderCustomerAppPromotions();
+  renderCustomerAppRecommendedProducts();
   renderCustomerAppProducts();
   const queryInput = document.getElementById("customer-app-promo-product-query");
   if (queryInput) {
@@ -5551,9 +5586,10 @@ function handleCustomerAppPromoProductInput() {
   const input = document.getElementById("customer-app-promo-product-query");
   const value = text(input.value);
   const row = firstRow(`
-    SELECT p.sku, p.description, p.base_price,
+    SELECT p.sku, p.description, p.base_price, p.standard_cost,
       COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
     WHERE p.sku = ? OR p.description = ?
@@ -5564,7 +5600,27 @@ function handleCustomerAppPromoProductInput() {
     input.value = `${row.sku} · ${row.description || ""}`;
     document.getElementById("customer-app-promo-price").value = number(row.sale_price) || "";
     document.getElementById("customer-app-promo-discount").value = number(row.promo_discount_percent) || "";
+    document.getElementById("customer-app-promo-recommended").checked = Boolean(number(row.customer_recommended));
+    renderCustomerAppPromoProductSummary(row);
+  } else {
+    document.getElementById("customer-app-promo-recommended").checked = false;
+    renderCustomerAppPromoProductSummary(null);
   }
+}
+
+function renderCustomerAppPromoProductSummary(row) {
+  const summary = document.getElementById("customer-app-promo-product-summary");
+  if (!summary) return;
+  if (!row?.sku) {
+    summary.innerHTML = "";
+    return;
+  }
+  summary.innerHTML = `
+    <strong>${escapeHtml(row.description || row.sku)}</strong>
+    <span>מק״ט ${escapeHtml(row.sku)}</span>
+    <span>מחיר קניה ${currency2(row.standard_cost)}</span>
+    <span>מחיר מכירה ${currency2(row.base_price || row.sale_price)}</span>
+  `;
 }
 
 function refreshCustomerAppProductOptions() {
@@ -5600,9 +5656,10 @@ async function resetCustomerAppPromotions() {
 function editCustomerAppPromo(sku) {
   ensureProductCustomerSettings();
   const row = firstRow(`
-    SELECT p.sku, p.description,
+    SELECT p.sku, p.description, p.base_price, p.standard_cost,
       COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
     WHERE p.sku = ?
@@ -5612,12 +5669,29 @@ function editCustomerAppPromo(sku) {
   document.getElementById("customer-app-promo-product-query").value = `${row.sku} · ${row.description || ""}`;
   document.getElementById("customer-app-promo-price").value = number(row.sale_price) || "";
   document.getElementById("customer-app-promo-discount").value = number(row.promo_discount_percent) || "";
+  document.getElementById("customer-app-promo-recommended").checked = Boolean(number(row.customer_recommended));
+  renderCustomerAppPromoProductSummary(row);
   showCustomerAppTab("promotions");
 }
 
 async function removeCustomerAppPromotion(sku) {
   document.getElementById("customer-app-promo-sku").value = sku;
   await saveCustomerAppPromo(true);
+}
+
+async function removeCustomerAppRecommendedProduct(sku) {
+  const updatedAt = new Date().toISOString();
+  state.db.run("UPDATE products SET customer_recommended = 0, updated_at = ? WHERE sku = ?", [updatedAt, sku]);
+  saveProductCustomerSetting(sku, { customer_recommended: 0 });
+  await Promise.all([
+    persistDatabase(),
+    updatePostgresProductSettings([sku], { customer_recommended: 0, updated_at: updatedAt }),
+  ]);
+  if (document.getElementById("customer-app-promo-sku").value === sku) {
+    document.getElementById("customer-app-promo-recommended").checked = false;
+  }
+  renderCustomerAppRecommendedProducts();
+  renderCustomerAppProducts();
 }
 
 function loadCustomerAppCustomer() {
