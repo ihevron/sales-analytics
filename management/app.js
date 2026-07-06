@@ -6238,13 +6238,14 @@ function setStatus(textValue) {
 async function readSavedDatabase(SQL) {
   const browserData = await readBrowserDatabase();
   const browserVersion = await databaseVersionFromBytes(browserData);
+  state.lastServerDatabaseNotModified = false;
   if (browserVersion) {
     state.databaseVersion = browserVersion;
     localStorage.setItem("databaseVersion", browserVersion);
   }
   const serverData = await readServerDatabase();
   if (serverData) return { data: serverData, source: "server" };
-  if (browserData) return { data: browserData, source: "browser" };
+  if (browserData) return { data: browserData, source: state.lastServerDatabaseNotModified ? "browser-current" : "browser" };
   return null;
 }
 
@@ -6285,7 +6286,10 @@ async function readServerDatabase() {
     const knownVersion = state.databaseVersion || localStorage.getItem("databaseVersion") || "";
     const headers = knownVersion ? { "If-None-Match": `"${knownVersion}"` } : {};
     const response = await fetch("/api/db", { cache: "no-store", headers });
-    if (response.status === 304) return null;
+    if (response.status === 304) {
+      state.lastServerDatabaseNotModified = true;
+      return null;
+    }
     if (!response.ok) return null;
     state.databaseVersion = response.headers.get("X-Database-Version") || "";
     if (state.databaseVersion) localStorage.setItem("databaseVersion", state.databaseVersion);
