@@ -2823,7 +2823,7 @@ async function saveOrder() {
   try {
     serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
     if (serverResult.ok) {
-      await reloadDatabaseFromServer();
+      await writeBrowserDatabase(state.db.export());
     } else {
       alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשארה על המסך ולא נשמרה, כדי לא לדרוס נתונים ממחשב ישן.`);
       return;
@@ -5267,7 +5267,6 @@ async function updateCustomerCallFromButton(button) {
     };
     const serverResult = await writeOrderDelta(delta);
     await writeBrowserDatabase(state.db.export());
-    if (serverResult.ok) await reloadDatabaseFromServer();
   } else if (state.callsSource !== "postgres") {
     await persistDatabase();
   }
@@ -5830,7 +5829,7 @@ async function deleteCustomerAppCustomer(customerNo) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) throw new Error(data.error || "מחיקת לקוח נכשלה");
     state.db.run("DELETE FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
-    await reloadDatabaseFromServer();
+    await writeBrowserDatabase(state.db.export());
     status.textContent = data.postgres?.ok === false ? "הלקוח נמחק מקובץ הנתונים, אך מחיקת Supabase נכשלה" : "הלקוח נמחק";
     ["customer-app-customer-no", "customer-app-customer-name", "customer-app-company-id", "customer-app-phone", "customer-app-address"].forEach((id) => {
       const input = document.getElementById(id);
