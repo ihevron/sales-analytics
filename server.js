@@ -32,6 +32,14 @@ let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
 let databaseBufferCache = null;
 let databaseBufferCacheLoadedAt = 0;
+let trafficStartedAt = new Date().toISOString();
+const trafficMetrics = {
+  requests: 0,
+  inboundBytes: 0,
+  outboundBytes: 0,
+  byPath: new Map(),
+  recent: [],
+};
 const priceAuditService = createPriceAuditService({
   supabaseUrl: postgresPreviewUrl || supabaseUrl,
   serviceKey: postgresPreviewKey || supabaseServiceRoleKey,
@@ -88,6 +96,116 @@ function send(res, status, body = "", headers = {}) {
 
 function sendJson(res, status, body) {
   send(res, status, JSON.stringify(body), { "Content-Type": "application/json; charset=utf-8" });
+}
+
+function byteLength(value) {
+  if (!value) return 0;
+  if (Buffer.isBuffer(value)) return value.length;
+  if (value instanceof Uint8Array) return value.byteLength;
+  return Buffer.byteLength(String(value));
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(2)} KB`;
+  return `${value} B`;
+}
+
+function trafficPathKey(req) {
+  const urlPath = (req.url || "/").split("?")[0] || "/";
+  if (urlPath === "/api/db") return "/api/db";
+  if (urlPath.startsWith("/api/")) return urlPath;
+  if (urlPath === "/" || urlPath === "/management/") return urlPath;
+  const ext = path.extname(urlPath).toLowerCase();
+  return ext ? `static:${ext}` : urlPath;
+}
+
+function summarizeTrafficEntry(entry) {
+  return {
+    ...entry,
+    inbound: formatBytes(entry.inboundBytes),
+    outbound: formatBytes(entry.outboundBytes),
+  };
+}
+
+function trafficSummary() {
+  const byPath = [...trafficMetrics.byPath.entries()]
+    .map(([key, value]) => ({
+      path: key,
+      requests: value.requests,
+      inboundBytes: value.inboundBytes,
+      outboundBytes: value.outboundBytes,
+      inbound: formatBytes(value.inboundBytes),
+      outbound: formatBytes(value.outboundBytes),
+      lastStatus: value.lastStatus,
+      lastSeenAt: value.lastSeenAt,
+    }))
+    .sort((a, b) => b.outboundBytes - a.outboundBytes || b.requests - a.requests);
+  return {
+    startedAt: trafficStartedAt,
+    requests: trafficMetrics.requests,
+    inboundBytes: trafficMetrics.inboundBytes,
+    outboundBytes: trafficMetrics.outboundBytes,
+    inbound: formatBytes(trafficMetrics.inboundBytes),
+    outbound: formatBytes(trafficMetrics.outboundBytes),
+    byPath,
+    recent: trafficMetrics.recent.slice(-100).reverse().map(summarizeTrafficEntry),
+  };
+}
+
+function resetTrafficMetrics() {
+  trafficStartedAt = new Date().toISOString();
+  trafficMetrics.requests = 0;
+  trafficMetrics.inboundBytes = 0;
+  trafficMetrics.outboundBytes = 0;
+  trafficMetrics.byPath.clear();
+  trafficMetrics.recent = [];
+}
+
+function attachTrafficMeter(req, res) {
+  const started = Date.now();
+  const key = trafficPathKey(req);
+  const inboundBytes = Number(req.headers["content-length"] || 0) || 0;
+  let outboundBytes = 0;
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+
+  res.write = (chunk, encoding, callback) => {
+    outboundBytes += byteLength(chunk);
+    return originalWrite(chunk, encoding, callback);
+  };
+  res.end = (chunk, encoding, callback) => {
+    outboundBytes += byteLength(chunk);
+    return originalEnd(chunk, encoding, callback);
+  };
+
+  res.on("finish", () => {
+    const entry = {
+      at: new Date().toISOString(),
+      method: req.method,
+      path: key,
+      rawPath: (req.url || "/").split("?")[0] || "/",
+      status: res.statusCode,
+      inboundBytes,
+      outboundBytes,
+      durationMs: Date.now() - started,
+    };
+    trafficMetrics.requests += 1;
+    trafficMetrics.inboundBytes += inboundBytes;
+    trafficMetrics.outboundBytes += outboundBytes;
+    const pathStats = trafficMetrics.byPath.get(key) || { requests: 0, inboundBytes: 0, outboundBytes: 0, lastStatus: 0, lastSeenAt: "" };
+    pathStats.requests += 1;
+    pathStats.inboundBytes += inboundBytes;
+    pathStats.outboundBytes += outboundBytes;
+    pathStats.lastStatus = res.statusCode;
+    pathStats.lastSeenAt = entry.at;
+    trafficMetrics.byPath.set(key, pathStats);
+    trafficMetrics.recent.push(entry);
+    if (trafficMetrics.recent.length > 500) trafficMetrics.recent.shift();
+    console.log(`[traffic] ${entry.method} ${entry.path} ${entry.status} out=${formatBytes(outboundBytes)} in=${formatBytes(inboundBytes)} ${entry.durationMs}ms`);
+  });
 }
 
 function databaseVersion(body) {
@@ -2647,6 +2765,7 @@ function handleStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  attachTrafficMeter(req, res);
   const requestPath = (req.url || "/").split("?")[0];
 
   if (requestPath === "/healthz") {
@@ -2675,7 +2794,24 @@ const server = http.createServer((req, res) => {
         ageSeconds: databaseBufferCacheLoadedAt ? Math.round((Date.now() - databaseBufferCacheLoadedAt) / 1000) : null,
         ttlSeconds: Math.round(dbCacheTtlMs / 1000),
       },
+      traffic: {
+        startedAt: trafficStartedAt,
+        requests: trafficMetrics.requests,
+        inbound: formatBytes(trafficMetrics.inboundBytes),
+        outbound: formatBytes(trafficMetrics.outboundBytes),
+      },
     });
+    return;
+  }
+
+  if (requestPath === "/api/traffic-usage" && req.method === "GET") {
+    sendJson(res, 200, { ok: true, ...trafficSummary() });
+    return;
+  }
+
+  if (requestPath === "/api/traffic-usage/reset" && req.method === "POST") {
+    resetTrafficMetrics();
+    sendJson(res, 200, { ok: true, ...trafficSummary() });
     return;
   }
 
