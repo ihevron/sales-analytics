@@ -1469,6 +1469,26 @@ async function handleDatabaseGet(req, res) {
   }
 }
 
+async function handleDatabaseMeta(req, res) {
+  try {
+    const data = await readCurrentDatabaseBuffer();
+    const version = databaseVersion(data);
+    sendJson(res, 200, {
+      ok: true,
+      version,
+      bytes: data.length,
+      size: formatBytes(data.length),
+      cache: {
+        loaded: Boolean(databaseBufferCache),
+        ageSeconds: databaseBufferCacheLoadedAt ? Math.round((Date.now() - databaseBufferCacheLoadedAt) / 1000) : null,
+        ttlSeconds: Math.round(dbCacheTtlMs / 1000),
+      },
+    });
+  } catch (error) {
+    sendJson(res, error.status === 404 ? 404 : 500, { ok: false, error: error.status === 404 ? "database not found" : "database metadata failed" });
+  }
+}
+
 function writeDatabaseToDisk(body, callback) {
   const tempPath = `${dbPath}.tmp`;
   fs.writeFile(tempPath, body, (writeError) => {
@@ -2828,6 +2848,14 @@ const server = http.createServer((req, res) => {
     handleDatabaseGet(req, res).catch((error) => {
       console.error(error);
       send(res, 500, "database read failed");
+    });
+    return;
+  }
+
+  if (requestPath === "/api/db-meta" && req.method === "GET") {
+    handleDatabaseMeta(req, res).catch((error) => {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: error.message || "database metadata failed" });
     });
     return;
   }

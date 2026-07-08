@@ -6341,9 +6341,21 @@ async function readSavedDatabase(SQL) {
     state.databaseVersion = browserVersion;
     localStorage.setItem("databaseVersion", browserVersion);
   }
+  if (browserData) {
+    const serverMeta = await readServerDatabaseMeta();
+    if (serverMeta?.version && serverMeta.version !== (browserVersion || localStorage.getItem("databaseVersion") || "")) {
+      state.serverDatabaseVersion = serverMeta.version;
+      console.info("פותח עם בסיס נתונים מקומי כדי להימנע מהורדה מלאה", { local: browserVersion, server: serverMeta.version, size: serverMeta.size });
+      return { data: browserData, source: "browser-stale" };
+    }
+    if (serverMeta?.version) {
+      state.databaseVersion = serverMeta.version;
+      localStorage.setItem("databaseVersion", serverMeta.version);
+    }
+    return { data: browserData, source: "browser-current" };
+  }
   const serverData = await readServerDatabase();
   if (serverData) return { data: serverData, source: "server" };
-  if (browserData) return { data: browserData, source: state.lastServerDatabaseNotModified ? "browser-current" : "browser" };
   return null;
 }
 
@@ -6394,6 +6406,18 @@ async function readServerDatabase() {
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     console.warn("לא ניתן לטעון בסיס נתונים מהשרת", error);
+    return null;
+  }
+}
+
+async function readServerDatabaseMeta() {
+  try {
+    const response = await fetch("/api/db-meta", { cache: "no-store" });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.ok ? data : null;
+  } catch (error) {
+    console.warn("לא ניתן לבדוק גרסת בסיס נתונים בשרת", error);
     return null;
   }
 }
