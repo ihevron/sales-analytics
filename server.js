@@ -2115,7 +2115,16 @@ async function handleOrderDelta(payload, res) {
         push = { ok: false, error: error.message };
       }
     }
-    sendJson(res, 200, { ok: true, orderId, applied: 1, postgres: postgresResult, push });
+    sendJson(res, 200, {
+      ok: true,
+      orderId,
+      applied: 1,
+      order: savedOrderRows[0] || null,
+      items: savedItemRows,
+      call: postgresCall,
+      postgres: postgresResult,
+      push,
+    });
   } catch (error) {
     try {
       db.run("ROLLBACK");

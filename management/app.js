@@ -2834,7 +2834,8 @@ async function saveOrder() {
   try {
     serverResult = await writeOrderDelta(buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientOrderKey }));
     if (serverResult.ok) {
-      await reloadDatabaseFromServer();
+      const applied = await applySavedOrderDelta(serverResult);
+      if (!applied) await reloadDatabaseFromServer();
     } else {
       alert(`השמירה לשרת נכשלה: ${serverResult.error || "שגיאה לא ידועה"}. ההזמנה נשארה על המסך ולא נשמרה, כדי לא לדרוס נתונים ממחשב ישן.`);
       return;
@@ -2912,6 +2913,87 @@ function buildCurrentOrderDelta({ orderDate, status, notes, totals, now, clientO
       updated_at: now,
     },
   };
+}
+
+async function applySavedOrderDelta(result) {
+  const order = result?.order;
+  const items = Array.isArray(result?.items) ? result.items : [];
+  if (!order?.id || !items.length) return false;
+  try {
+    state.db.run("BEGIN TRANSACTION");
+    state.db.run("DELETE FROM customer_order_items WHERE order_id = ?", [number(order.id)]);
+    state.db.run("DELETE FROM customer_orders WHERE id = ?", [number(order.id)]);
+    state.db.run(`
+      INSERT INTO customer_orders (id, order_date, customer_no, customer_name, status, notes, estimated_total, estimated_profit, picked_by, picked_at, invoice_printed, shipped_at, process_hidden, updated_at, client_order_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      number(order.id),
+      text(order.order_date),
+      text(order.customer_no),
+      text(order.customer_name),
+      text(order.status),
+      text(order.notes),
+      number(order.estimated_total),
+      number(order.estimated_profit),
+      order.picked_by || null,
+      order.picked_at || null,
+      dbFlag(order.invoice_printed) ? 1 : 0,
+      order.shipped_at || null,
+      dbFlag(order.process_hidden) ? 1 : 0,
+      order.updated_at || new Date().toISOString(),
+      order.client_order_key || null,
+    ]);
+    items.forEach((item) => {
+      state.db.run(`
+        INSERT INTO customer_order_items (id, order_id, sku, product_desc, quantity, picked_quantity, note, item_status, substitute_product_id, action_sequence, entry_sequence, is_carton, units_per_carton, shortage_dismissed, estimated_price, estimated_profit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        number(item.id),
+        number(item.order_id),
+        text(item.sku),
+        text(item.product_desc),
+        number(item.quantity),
+        number(item.picked_quantity),
+        text(item.note),
+        text(item.item_status || "pending"),
+        item.substitute_product_id || null,
+        item.action_sequence === null || item.action_sequence === undefined ? null : number(item.action_sequence),
+        number(item.entry_sequence),
+        dbFlag(item.is_carton) ? 1 : 0,
+        number(item.units_per_carton) || 1,
+        dbFlag(item.shortage_dismissed) ? 1 : 0,
+        number(item.estimated_price),
+        number(item.estimated_profit),
+      ]);
+    });
+    if (result.call?.customer_no && result.call?.call_date) {
+      const call = result.call;
+      state.db.run("DELETE FROM customer_calls WHERE customer_no = ? AND call_date = ?", [text(call.customer_no), text(call.call_date)]);
+      state.db.run(`
+        INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, manual_order_id, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        text(call.call_date),
+        text(call.customer_no),
+        text(call.customer_name),
+        text(call.status || "ordered"),
+        call.call_again_time || null,
+        call.whatsapp_sent_at || null,
+        number(call.manual_order_id) || number(order.id),
+        text(call.notes),
+        call.updated_at || new Date().toISOString(),
+      ]);
+    }
+    state.db.run("COMMIT");
+    await writeBrowserDatabase(state.db.export());
+    return true;
+  } catch (error) {
+    try {
+      state.db.run("ROLLBACK");
+    } catch {}
+    console.warn("לא ניתן לעדכן הזמנה מקומית אחרי שמירה", error);
+    return false;
+  }
 }
 
 function exportCurrentOrder() {
@@ -6466,7 +6548,7 @@ async function writeOrderDelta(delta) {
     if (response.ok) {
       const result = await response.json().catch(() => ({}));
       updateServerSaveStatus({ ok: result.ok !== false });
-      return { ok: result.ok !== false, orderId: result.orderId };
+      return { ...result, ok: result.ok !== false, orderId: result.orderId };
     }
     const textValue = await response.text();
     updateServerSaveStatus({ ok: false, error: textValue });
