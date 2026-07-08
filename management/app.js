@@ -1639,9 +1639,9 @@ function automaticRecommendations(customerNo) {
   const categories = queryRows(`
     SELECT LOWER(COALESCE(s.category, p.category, s.product_desc, '')) AS text_value
     FROM sales_raw s LEFT JOIN products p ON p.sku = s.sku
-    WHERE s.customer_no = ?
+    WHERE s.customer_no = ? AND s.sale_date >= ? AND s.sale_date < ?
     GROUP BY LOWER(COALESCE(s.category, p.category, s.product_desc, ''))
-  `, [customerNo]).map((row) => row.text_value || "");
+  `, [customerNo, ...orderContextDateParams()]).map((row) => row.text_value || "");
   const has = (needle) => categories.some((value) => value.includes(needle));
   const recs = [];
   if (has("גבינ") && !has("קרקר")) recs.push("הלקוח קונה גבינות. מומלץ להציע קרקרים.");
@@ -1657,21 +1657,30 @@ function automaticRecommendations(customerNo) {
 
   queryRows(`
     WITH customer_categories AS (
-      SELECT DISTINCT COALESCE(category, '') AS category FROM sales_raw WHERE customer_no = ?
+      SELECT DISTINCT COALESCE(category, '') AS category
+      FROM sales_raw
+      WHERE customer_no = ? AND sale_date >= ? AND sale_date < ?
     ),
     peer_products AS (
       SELECT s.sku, COALESCE(MAX(s.product_desc), MAX(p.description), s.sku) AS product, SUM(s.profit) AS profit, SUM(s.sales_amount) AS sales
       FROM sales_raw s
       LEFT JOIN products p ON p.sku = s.sku
       WHERE COALESCE(s.category, p.category, '') IN (SELECT category FROM customer_categories)
-        AND s.sku NOT IN (SELECT sku FROM sales_raw WHERE customer_no = ? AND sku <> '')
+        AND s.sale_date >= ? AND s.sale_date < ?
+        AND s.sku NOT IN (SELECT sku FROM sales_raw WHERE customer_no = ? AND sale_date >= ? AND sale_date < ? AND sku <> '')
       GROUP BY s.sku
       HAVING sales > 0 AND profit / sales > 0.25
       ORDER BY profit DESC
       LIMIT 3
     )
     SELECT product FROM peer_products
-  `, [customerNo, customerNo]).forEach((row) => recs.push(`לקוחות דומים קונים את ${row.product}. מומלץ להציע אותו.`));
+  `, [
+    customerNo,
+    ...orderContextDateParams(),
+    ...orderContextDateParams(),
+    customerNo,
+    ...orderContextDateParams(),
+  ]).forEach((row) => recs.push(`לקוחות דומים קונים את ${row.product}. מומלץ להציע אותו.`));
   return recs;
 }
 
@@ -2412,10 +2421,11 @@ function renderOrderProductResults() {
   const rows = queryRows(`
     SELECT sku, description, source_rank, quantity
     FROM (
-      SELECT cps.sku, COALESCE(cps.product_desc, p.description, cps.sku) AS description, 0 AS source_rank, cps.quantity
-      FROM customer_product_summary cps
-      LEFT JOIN products p ON p.sku = cps.sku
-      WHERE cps.customer_no = ? AND (cps.sku LIKE ? OR cps.product_desc LIKE ? OR p.description LIKE ?)
+      SELECT s.sku, COALESCE(MAX(s.product_desc), p.description, s.sku) AS description, 0 AS source_rank, SUM(s.quantity) AS quantity
+      FROM sales_raw s
+      LEFT JOIN products p ON p.sku = s.sku
+      WHERE s.customer_no = ? AND s.sale_date >= ? AND s.sale_date < ? AND (s.sku LIKE ? OR s.product_desc LIKE ? OR p.description LIKE ?)
+      GROUP BY s.sku
       UNION
       SELECT p.sku, COALESCE(p.description, p.sku) AS description, 1 AS source_rank, 0 AS quantity
       FROM products p
@@ -2425,7 +2435,7 @@ function renderOrderProductResults() {
     GROUP BY sku
     ORDER BY source_rank, quantity DESC, description
     LIMIT 80
-  `, [state.orderCustomer.customer_no, query, query, query, query, query]);
+  `, [state.orderCustomer.customer_no, ...orderContextDateParams(), query, query, query, query, query]);
   list.innerHTML = rows.length
     ? rows.map((row) => `
       <button class="autocomplete-option" data-order-product="${escapeAttr(row.sku)}">
@@ -2593,8 +2603,8 @@ function productDetailsForOrder(customerNo, sku) {
       CASE WHEN SUM(quantity) = 0 THEN 0 ELSE SUM(profit) / SUM(quantity) END AS profit_per_unit,
       CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
     FROM sales_raw
-    WHERE customer_no = ? AND sku = ?
-  `, [sku, customerNo, sku]);
+    WHERE customer_no = ? AND sku = ? AND sale_date >= ? AND sale_date < ?
+  `, [sku, customerNo, sku, ...orderContextDateParams()]);
   const fallbackPrice = number(product.base_price);
   const lastPrice = number(history.last_price) || fallbackPrice;
   const profitPerUnit = number(history.last_price) ? number(history.profit_per_unit) : fallbackPrice - number(product.standard_cost);
@@ -2717,11 +2727,11 @@ function renderSuggestedProducts() {
       END AS weekly_quantity,
       CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
     FROM sales_raw
-    WHERE customer_no = ?
+    WHERE customer_no = ? AND sale_date >= ? AND sale_date < ?
     GROUP BY sku
     ORDER BY quantity DESC
     LIMIT 200
-  `, [customerNo]).filter((row) => row.sku && !blocked.includes(row.sku)).slice(0, 30) : [];
+  `, [customerNo, ...orderContextDateParams()]).filter((row) => row.sku && !blocked.includes(row.sku)).slice(0, 30) : [];
   const used = new Set([...blocked, ...customerRows.map((row) => row.sku)]);
   const fillerRows = customerRows.length < 30 ? queryRows(`
     SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity, COALESCE(s.weekly_quantity, 0) AS weekly_quantity, COALESCE(s.returns_percent, 0) AS returns_percent
@@ -2737,12 +2747,13 @@ function renderSuggestedProducts() {
         END AS weekly_quantity,
         CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
       FROM sales_raw
+      WHERE sale_date >= ? AND sale_date < ?
       GROUP BY sku
     ) s ON s.sku = p.sku
     WHERE p.sku <> ''
     ORDER BY COALESCE(s.quantity, 0) DESC, p.description
     LIMIT 300
-  `).filter((row) => row.sku && !used.has(row.sku)).slice(0, 30 - customerRows.length) : [];
+  `, orderContextDateParams()).filter((row) => row.sku && !used.has(row.sku)).slice(0, 30 - customerRows.length) : [];
   const rows = [...customerRows, ...fillerRows];
   renderTable("order-suggested-table", rows, [
     { key: "product", label: "מוצר", render: (row) => `<button class="suggested-product-button" data-suggested-sku="${escapeAttr(row.sku)}">${escapeHtml(row.product)}</button>` },
@@ -6159,6 +6170,11 @@ function dateRange(months) {
   const end = latestSalesMonthEnd();
   const start = new Date(end.getFullYear(), end.getMonth() - months, 1);
   return { start: toSqlDate(start), end: toSqlDate(end) };
+}
+
+function orderContextDateParams() {
+  const range = dateRange(3);
+  return [range.start, range.end];
 }
 
 function latestSalesMonthEnd() {

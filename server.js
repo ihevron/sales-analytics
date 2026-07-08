@@ -2055,6 +2055,12 @@ function currentDateIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function monthsAgoDateIso(months) {
+  const date = new Date();
+  date.setMonth(date.getMonth() - months);
+  return date.toISOString().slice(0, 10);
+}
+
 function columnsFor(db, table) {
   return new Set(sqliteRows(db, `PRAGMA table_info(${table})`).map((row) => String(row.name || "")));
 }
@@ -2400,12 +2406,10 @@ async function handleCustomerProducts(req, res) {
     ].join(", ");
     const hasCustomerSummary = tableExists(db, "customer_product_summary");
     const hasSalesRaw = tableExists(db, "sales_raw");
-    const returnsStart = new Date();
-    returnsStart.setFullYear(returnsStart.getFullYear() - 1);
-    const returnsStartDate = returnsStart.toISOString().slice(0, 10);
-    const customerUsage = hasCustomerSummary
-      ? "SELECT sku, SUM(quantity) AS customer_quantity FROM customer_product_summary WHERE customer_no = ? GROUP BY sku"
-      : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS customer_quantity FROM sales_raw WHERE customer_no = ? GROUP BY sku" : "SELECT '' AS sku, 0 AS customer_quantity WHERE 0");
+    const customerUsageStartDate = monthsAgoDateIso(3);
+    const customerUsage = hasSalesRaw
+      ? "SELECT sku, SUM(quantity) AS customer_quantity FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
+      : (hasCustomerSummary ? "SELECT sku, SUM(quantity) AS customer_quantity FROM customer_product_summary WHERE customer_no = ? GROUP BY sku" : "SELECT '' AS sku, 0 AS customer_quantity WHERE 0");
     const recentUsage = hasSalesRaw
       ? "SELECT sku, SUM(quantity) AS recent_customer_quantity FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
       : "SELECT '' AS sku, 0 AS recent_customer_quantity WHERE 0";
@@ -2422,8 +2426,8 @@ async function handleCustomerProducts(req, res) {
       ORDER BY COALESCE(cu.customer_quantity, 0) DESC, COALESCE(gu.global_quantity, 0) DESC, p.description ASC
       LIMIT 3000
     `, [
-      ...((hasCustomerSummary || hasSalesRaw) ? [session.customer_no] : []),
-      ...(hasSalesRaw ? [session.customer_no, returnsStartDate] : []),
+      ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : (hasCustomerSummary ? [session.customer_no] : [])),
+      ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : []),
     ]);
     const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);
     const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
