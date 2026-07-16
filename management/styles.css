@@ -2631,19 +2631,6 @@ td small {
   color: var(--ink);
 }
 
-[data-process-tab="pending"],
-[data-process-tab="picked"],
-[data-process-tab="shipping"],
-[data-process-pane="pending"],
-[data-process-pane="picked"],
-[data-process-pane="shipping"] {
-  display: none !important;
-}
-
-.process-tabs {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .process-stage-check {
   display: inline-grid;
   place-items: center;
@@ -2686,4 +2673,3 @@ td small {
   max-width: 420px;
   font-weight: 850;
 }
-

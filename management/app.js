@@ -767,21 +767,27 @@ function bindEvents() {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
-  document.getElementById("export-selected-priority").addEventListener("click", exportSelectedPriorityOrders);
+  document.querySelectorAll("#export-selected-priority").forEach((button) => button.addEventListener("click", exportSelectedPriorityOrders));
   document.getElementById("mark-selected-picked").addEventListener("click", markSelectedProcessOrdersPicked);
-  document.getElementById("mark-selected-invoices-printed").addEventListener("click", markSelectedPickedOrdersInvoicesPrinted);
-  document.getElementById("select-all-picked-orders").addEventListener("click", selectAllPickedProcessOrders);
-  document.getElementById("clear-selected-orders").addEventListener("click", () => {
+  document.querySelectorAll("#mark-selected-invoices-printed").forEach((button) => button.addEventListener("click", markSelectedPickedOrdersInvoicesPrinted));
+  document.querySelectorAll("#select-all-picked-orders").forEach((button) => button.addEventListener("click", selectAllPickedProcessOrders));
+  document.querySelectorAll("#clear-selected-orders").forEach((button) => button.addEventListener("click", () => {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
-  });
+  }));
   document.getElementById("select-all-shipping-orders").addEventListener("click", selectAllShippingProcessOrders);
   document.getElementById("clear-selected-shipping-orders").addEventListener("click", () => {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
-  document.getElementById("mark-selected-shipped").addEventListener("click", markSelectedProcessOrdersShippedBatch);
+  document.querySelectorAll("#mark-selected-shipped").forEach((button) => button.addEventListener("click", markSelectedProcessOrdersShippedBatch));
   document.getElementById("hide-selected-shipping-orders").addEventListener("click", hideSelectedShippingOrders);
+  document.getElementById("select-all-distribution-orders").addEventListener("click", selectAllDistributionProcessOrders);
+  document.getElementById("clear-selected-distribution-orders").addEventListener("click", () => {
+    state.selectedProcessOrders.clear();
+    renderOrderHistory();
+  });
+  document.getElementById("hide-selected-distribution-orders").addEventListener("click", hideSelectedDistributionOrders);
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
     state.processTab = button.dataset.processTab;
     renderOrderHistory();
@@ -3150,25 +3156,6 @@ async function renderPicking() {
 function normalizeClosedOrderStatuses() {
   state.db.run("UPDATE customer_orders SET status = 'נשלחה' WHERE COALESCE(shipped_at, '') <> '' AND status <> 'נשלחה'");
   state.db.run("UPDATE customer_orders SET status = 'picked' WHERE COALESCE(picked_at, '') <> '' AND COALESCE(shipped_at, '') = '' AND status = 'מוכן לאיסוף'");
-  state.db.run(`
-    UPDATE customer_orders
-    SET status = 'picked',
-        picked_by = COALESCE(picked_by, 'מלקט'),
-        picked_at = COALESCE(picked_at, ?),
-        updated_at = ?
-    WHERE status = 'מוכן לאיסוף'
-      AND EXISTS (
-        SELECT 1 FROM customer_order_items i
-        WHERE i.order_id = customer_orders.id
-          AND COALESCE(i.item_status, 'pending') <> 'return'
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM customer_order_items i
-        WHERE i.order_id = customer_orders.id
-          AND COALESCE(i.item_status, 'pending') = 'pending'
-          AND COALESCE(i.item_status, 'pending') <> 'return'
-      )
-  `, [new Date().toISOString(), new Date().toISOString()]);
 }
 
 function refreshPickingProductControls() {
@@ -3368,7 +3355,7 @@ function pickingOrderItemsHtml(orderId) {
       <div class="picking-complete-bar">
         <button class="secondary-action" data-add-picking-product="${orderId}">הוספת מוצר</button>
         <button class="secondary-action" data-pick-all="${orderId}" ${pending.length ? "" : "disabled"}>סמן שלוקט הכל</button>
-        <button class="primary-action" data-complete-picking="${orderId}" ${canComplete && order.status !== "picked" ? "" : "disabled"}>אשר ליקוט</button>
+        <button class="primary-action" data-complete-picking="${orderId}" ${canComplete && order.status !== "picked" ? "" : "disabled"}>אישור סופי לליקוט</button>
         ${order.status === "picked" ? `<button class="secondary-action" data-export-picked="${orderId}">יצוא לפריוריטי</button>` : ""}
       </div>
     </div>
@@ -3626,6 +3613,7 @@ function editPickedItem(itemId) {
 async function completePickingOrder(orderId) {
   const pending = scalar("SELECT COUNT(*) FROM customer_order_items WHERE order_id = ? AND COALESCE(item_status, 'pending') = 'pending'", [orderId]);
   if (number(pending) > 0) return;
+  if (!confirm("לאשר סופית שההזמנה לוקטה במלואה?")) return;
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?", ["מלקט", now, now, orderId]);
   queuePickingChange({ type: "completeOrder", orderId, pickedBy: "מלקט", pickedAt: now, updatedAt: now });
@@ -3760,6 +3748,7 @@ async function renderOrderHistory() {
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
     { key: "customer_name", label: "לקוח", render: (row) => `<strong class="process-customer-name">${escapeHtml(row.customer_name)}</strong><small>${escapeHtml(row.customer_no || "")}</small>` },
     { key: "order_date", label: "תאריך" },
+    { key: "status", label: "סטטוס" },
     { key: "picked_step", label: "ליקוט", sortable: false, render: (row) => processStageCheckbox(row, "picked") },
     { key: "invoice_step", label: "חשבונית", sortable: false, render: (row) => processStageCheckbox(row, "invoice") },
     { key: "shipping_step", label: "נשלח", sortable: false, render: (row) => processStageCheckbox(row, "shipped") },
@@ -3836,6 +3825,29 @@ async function renderOrderHistory() {
       <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
     ` },
   ], "shipping", "id", "desc");
+
+  const distributionRows = filterProcessRows(queryRows(`
+    SELECT id, order_date, customer_no, customer_name, status, estimated_total, invoice_printed, shipped_at
+    FROM customer_orders
+    WHERE (status = 'נשלחה' OR COALESCE(shipped_at, '') <> '')
+      AND COALESCE(process_hidden, 0) = 0
+      AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    ORDER BY shipped_at DESC, id DESC
+    LIMIT 500
+  `, [query, query, query]), statusFilter);
+  renderTable("distribution-table", distributionRows, [
+    { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
+    { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
+    { key: "order_date", label: "תאריך" },
+    { key: "customer_name", label: "לקוח" },
+    { key: "status", label: "סטטוס" },
+    { key: "shipped_at", label: "סומנה כנשלחה", render: (row) => escapeHtml(row.shipped_at || "") },
+    { key: "estimated_total", label: "סכום משוער", format: currency },
+    { key: "actions", label: "פעולות", sortable: false, render: (row) => `
+      <button class="small-action" data-view-process-order="${row.id}">צפייה</button>
+      <button class="danger-action process-remove" data-hide-process-order="${row.id}" title="הסר מהרשימה">X</button>
+    ` },
+  ], "distribution", "shipped_at", "desc");
   document.querySelectorAll("[data-open-picking-order]").forEach((button) => button.addEventListener("click", () => {
     state.expandedPickingOrderId = Number(button.dataset.openPickingOrder);
     showScreen("picking");
@@ -3847,7 +3859,7 @@ async function renderOrderHistory() {
   document.querySelectorAll("[data-process-stage]").forEach((input) => input.addEventListener("change", () => updateProcessStage(input)));
   bindProcessOrderSelection();
   const missedCount = renderMissedOrders(query);
-  updateProcessTabCounts({ orders: processRows.length, pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, missed: missedCount });
+  updateProcessTabCounts({ orders: processRows.length, pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, distribution: distributionRows.length, missed: missedCount });
 }
 
 function filterProcessRows(rows, filter) {
@@ -3993,6 +4005,7 @@ function updateProcessTabCounts(counts) {
     pending: "ממתינות לליקוט",
     picked: "הזמנות שלוקטו",
     shipping: "מוכן למשלוח",
+    distribution: "הזמנות בחלוקה",
     missed: "הזמנות שהוחמצו",
   };
   labels.orders = "הזמנות פעילות";
@@ -4489,6 +4502,34 @@ function selectedShippingOrderIds() {
   `, ids).map((row) => String(row.id));
 }
 
+function selectAllDistributionProcessOrders() {
+  const query = `%${document.getElementById("history-query").value.trim()}%`;
+  const rows = filterProcessRows(queryRows(`
+    SELECT id, status, invoice_printed, shipped_at
+    FROM customer_orders
+    WHERE (status = 'נשלחה' OR COALESCE(shipped_at, '') <> '')
+      AND COALESCE(process_hidden, 0) = 0
+      AND (customer_name LIKE ? OR customer_no LIKE ? OR CAST(id AS TEXT) LIKE ?)
+    ORDER BY shipped_at DESC, id DESC
+    LIMIT 500
+  `, [query, query, query]), state.processStatusFilter);
+  rows.forEach((row) => state.selectedProcessOrders.add(String(row.id)));
+  renderOrderHistory();
+}
+
+function selectedDistributionOrderIds() {
+  const ids = [...state.selectedProcessOrders].map((id) => String(id));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return queryRows(`
+    SELECT id
+    FROM customer_orders
+    WHERE CAST(id AS TEXT) IN (${placeholders})
+      AND (status = 'נשלחה' OR COALESCE(shipped_at, '') <> '')
+      AND COALESCE(process_hidden, 0) = 0
+  `, ids).map((row) => String(row.id));
+}
+
 function selectedActiveProcessOrderIds() {
   const ids = [...state.selectedProcessOrders].map((id) => String(id));
   if (!ids.length) return [];
@@ -4508,8 +4549,8 @@ async function markSelectedShippingOrdersShipped() {
   if (!confirm(`לסמן ${integer(ids.length)} הזמנות כנשלחו?`)) return;
   const now = new Date().toISOString();
   const results = await Promise.all(ids.map(async (orderId) => {
-    state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
-    return patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+    state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", [now, now, orderId]);
+    return patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
   }));
   ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
   await writeBrowserDatabase(state.db.export());
@@ -4539,12 +4580,12 @@ async function markSelectedProcessOrdersShippedBatch() {
   const now = new Date().toISOString();
   state.db.run("BEGIN TRANSACTION");
   ids.forEach((orderId) => {
-    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", ["נשלחה", now, now, orderId]);
+    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", ["נשלחה", now, now, orderId]);
   });
   state.db.run("COMMIT");
   ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
   await writeBrowserDatabase(state.db.export());
-  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
   state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   renderOrderHistory();
@@ -4629,9 +4670,9 @@ async function markInvoicePrinted(orderId) {
 
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
-  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 1, updated_at = ? WHERE id = ?", [now, now, orderId]);
+  state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", [now, now, orderId]);
   state.selectedProcessOrders.delete(String(orderId));
-  const result = await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: true, updated_at: now });
+  const result = await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   await writeBrowserDatabase(state.db.export());
   renderOrderHistory();
@@ -6252,6 +6293,23 @@ function dateRange(months) {
   const end = latestSalesMonthEnd();
   const start = new Date(end.getFullYear(), end.getMonth() - months, 1);
   return { start: toSqlDate(start), end: toSqlDate(end) };
+}
+
+async function hideSelectedDistributionOrders() {
+  const ids = selectedDistributionOrderIds();
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית הזמנות בחלוקה.");
+  if (!confirm(`להסיר ${integer(ids.length)} הזמנות מהרשימה?`)) return;
+  const now = new Date().toISOString();
+  const results = await Promise.all(ids.map(async (orderId) => {
+    state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [now, orderId]);
+    return patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
+  }));
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length) alert(`${integer(failed.length)} הזמנות לא נשמרו לשרת.`);
+  renderOrderHistory();
+  renderPicking();
 }
 
 function orderContextDateParams() {

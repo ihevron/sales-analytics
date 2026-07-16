@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="./styles.css?v=20260705customerpromos" />
     <script defer src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script defer src="./app.js?v=20260708dbmetaopen"></script>
+    <script defer src="./app.js?v=20260716distribution"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -241,9 +241,10 @@
             </div>
             <div class="process-tabs" id="process-tabs">
               <button class="active" data-process-tab="orders">הזמנות פעילות</button>
-              <button class="active" data-process-tab="pending">ממתינות לליקוט</button>
+              <button data-process-tab="pending">ממתינות לליקוט</button>
               <button data-process-tab="picked">הזמנות שלוקטו</button>
               <button data-process-tab="shipping">מוכן למשלוח</button>
+              <button data-process-tab="distribution">הזמנות בחלוקה</button>
               <button data-process-tab="missed">הזמנות שהוחמצו</button>
             </div>
             <div class="process-pane active" data-process-pane="orders">
@@ -257,7 +258,7 @@
               </div>
               <div class="table-wrap"><table id="process-orders-table"></table></div>
             </div>
-            <div class="process-pane active" data-process-pane="pending">
+            <div class="process-pane" data-process-pane="pending">
               <div class="table-wrap"><table id="process-pending-table"></table></div>
             </div>
             <div class="process-pane" data-process-pane="picked">
@@ -277,6 +278,14 @@
                 <button class="danger-action" id="hide-selected-shipping-orders" type="button">הסר נבחרים</button>
               </div>
               <div class="table-wrap"><table id="shipping-table"></table></div>
+            </div>
+            <div class="process-pane" data-process-pane="distribution">
+              <div class="bulk-order-actions">
+                <button class="secondary-action" id="select-all-distribution-orders" type="button">סמן הכל</button>
+                <button class="secondary-action" id="clear-selected-distribution-orders" type="button">בטל סימון</button>
+                <button class="danger-action" id="hide-selected-distribution-orders" type="button">הסר נבחרים</button>
+              </div>
+              <div class="table-wrap"><table id="distribution-table"></table></div>
             </div>
             <div class="process-pane" data-process-pane="missed">
               <div id="missed-orders-list" class="missed-orders-list"></div>
