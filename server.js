@@ -27,12 +27,25 @@ const orderPushWebhookUrl = process.env.ORDER_PUSH_WEBHOOK_URL || "https://ntfy.
 const orderPushToken = process.env.ORDER_PUSH_TOKEN || "";
 const orderPushFormat = String(process.env.ORDER_PUSH_FORMAT || "").trim().toLowerCase();
 const dbCacheTtlMs = Number(process.env.DB_CACHE_TTL_MS || 60 * 60 * 1000);
+const trafficHistoryDays = Math.max(1, Number(process.env.TRAFFIC_HISTORY_DAYS || 7));
+const trafficHistoryObject = process.env.TRAFFIC_HISTORY_OBJECT || "traffic-usage-history.json";
+const trafficHistoryPath = path.join(dataDir, trafficHistoryObject.replace(/[\\/]+/g, "-"));
+const trafficHistoryFlushMs = Math.max(30 * 1000, Number(process.env.TRAFFIC_HISTORY_FLUSH_MS || 60 * 1000));
 const gzip = promisify(zlib.gzip);
 let SQLRuntimePromise = null;
 let dbMutationQueue = Promise.resolve();
 let databaseBufferCache = null;
 let databaseBufferCacheLoadedAt = 0;
 let trafficStartedAt = new Date().toISOString();
+let trafficHistoryLoaded = false;
+let trafficHistoryDirty = false;
+let trafficHistoryFlushTimer = null;
+const trafficHistory = {
+  startedAt: new Date().toISOString(),
+  updatedAt: "",
+  retentionDays: trafficHistoryDays,
+  buckets: {},
+};
 const trafficMetrics = {
   requests: 0,
   inboundBytes: 0,
@@ -155,6 +168,161 @@ function trafficSummary() {
   };
 }
 
+function trafficHourKey(isoDate) {
+  return `${String(isoDate || new Date().toISOString()).slice(0, 13)}:00:00.000Z`;
+}
+
+function mergeTrafficHistory(rawHistory) {
+  if (!rawHistory || typeof rawHistory !== "object") return;
+  if (rawHistory.startedAt && Date.parse(rawHistory.startedAt) < Date.parse(trafficHistory.startedAt)) {
+    trafficHistory.startedAt = rawHistory.startedAt;
+  }
+  const buckets = rawHistory.buckets || {};
+  Object.entries(buckets).forEach(([hour, paths]) => {
+    if (!trafficHistory.buckets[hour]) trafficHistory.buckets[hour] = {};
+    Object.entries(paths || {}).forEach(([pathKey, stats]) => {
+      const target = trafficHistory.buckets[hour][pathKey] || { requests: 0, inboundBytes: 0, outboundBytes: 0, errors: 0, maxOutboundBytes: 0, lastStatus: 0, lastSeenAt: "" };
+      target.requests += Number(stats.requests || 0);
+      target.inboundBytes += Number(stats.inboundBytes || 0);
+      target.outboundBytes += Number(stats.outboundBytes || 0);
+      target.errors += Number(stats.errors || 0);
+      target.maxOutboundBytes = Math.max(Number(target.maxOutboundBytes || 0), Number(stats.maxOutboundBytes || 0));
+      target.lastStatus = stats.lastStatus || target.lastStatus || 0;
+      target.lastSeenAt = stats.lastSeenAt || target.lastSeenAt || "";
+      trafficHistory.buckets[hour][pathKey] = target;
+    });
+  });
+  trafficHistory.updatedAt = rawHistory.updatedAt || trafficHistory.updatedAt || "";
+  pruneTrafficHistory();
+}
+
+function pruneTrafficHistory(referenceTime = Date.now()) {
+  const cutoff = referenceTime - trafficHistoryDays * 24 * 60 * 60 * 1000;
+  Object.keys(trafficHistory.buckets).forEach((hour) => {
+    const timestamp = Date.parse(hour);
+    if (!Number.isFinite(timestamp) || timestamp < cutoff) delete trafficHistory.buckets[hour];
+  });
+  trafficHistory.retentionDays = trafficHistoryDays;
+}
+
+async function loadTrafficHistory() {
+  if (trafficHistoryLoaded) return;
+  trafficHistoryLoaded = true;
+  try {
+    if (fs.existsSync(trafficHistoryPath)) {
+      mergeTrafficHistory(JSON.parse(await fs.promises.readFile(trafficHistoryPath, "utf8")));
+    }
+  } catch (error) {
+    console.warn("Traffic history local load failed", error.message);
+  }
+  if (!useSupabase) return;
+  try {
+    const response = await fetch(supabaseObjectUrl(trafficHistoryObject), {
+      headers: supabaseHeaders({ Authorization: `Bearer ${supabaseServiceRoleKey}` }),
+    });
+    if (response.ok) mergeTrafficHistory(await response.json());
+  } catch (error) {
+    console.warn("Traffic history supabase load failed", error.message);
+  }
+}
+
+function recordTrafficHistory(entry) {
+  const hour = trafficHourKey(entry.at);
+  if (!trafficHistory.buckets[hour]) trafficHistory.buckets[hour] = {};
+  const stats = trafficHistory.buckets[hour][entry.path] || { requests: 0, inboundBytes: 0, outboundBytes: 0, errors: 0, maxOutboundBytes: 0, lastStatus: 0, lastSeenAt: "" };
+  stats.requests += 1;
+  stats.inboundBytes += Number(entry.inboundBytes || 0);
+  stats.outboundBytes += Number(entry.outboundBytes || 0);
+  stats.errors += Number(entry.status || 0) >= 400 ? 1 : 0;
+  stats.maxOutboundBytes = Math.max(Number(stats.maxOutboundBytes || 0), Number(entry.outboundBytes || 0));
+  stats.lastStatus = entry.status;
+  stats.lastSeenAt = entry.at;
+  trafficHistory.buckets[hour][entry.path] = stats;
+  trafficHistory.updatedAt = entry.at;
+  trafficHistoryDirty = true;
+  pruneTrafficHistory(Date.parse(entry.at) || Date.now());
+  scheduleTrafficHistoryFlush();
+}
+
+function scheduleTrafficHistoryFlush() {
+  if (trafficHistoryFlushTimer) return;
+  trafficHistoryFlushTimer = setTimeout(() => {
+    trafficHistoryFlushTimer = null;
+    flushTrafficHistory().catch((error) => console.warn("Traffic history flush failed", error.message));
+  }, trafficHistoryFlushMs);
+}
+
+async function flushTrafficHistory() {
+  if (!trafficHistoryDirty) return;
+  trafficHistoryDirty = false;
+  pruneTrafficHistory();
+  const body = JSON.stringify(trafficHistory);
+  await fs.promises.writeFile(trafficHistoryPath, body);
+  if (!useSupabase) return;
+  const response = await fetch(supabaseObjectUrl(trafficHistoryObject), {
+    method: "PUT",
+    headers: supabaseHeaders({
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      "Content-Type": "application/json; charset=utf-8",
+      "x-upsert": "true",
+    }),
+    body,
+  });
+  if (!response.ok) throw new Error(`traffic history upload failed: ${response.status} ${await response.text()}`);
+}
+
+function trafficHistorySummary(days = trafficHistoryDays) {
+  const safeDays = Math.max(1, Math.min(trafficHistoryDays, Number(days) || trafficHistoryDays));
+  const cutoff = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+  const byPath = new Map();
+  const byHour = [];
+  let requests = 0;
+  let inboundBytes = 0;
+  let outboundBytes = 0;
+  Object.entries(trafficHistory.buckets).sort(([a], [b]) => a.localeCompare(b)).forEach(([hour, paths]) => {
+    const timestamp = Date.parse(hour);
+    if (!Number.isFinite(timestamp) || timestamp < cutoff) return;
+    const hourStats = { hour, requests: 0, inboundBytes: 0, outboundBytes: 0, inbound: "0 B", outbound: "0 B", paths: [] };
+    Object.entries(paths || {}).forEach(([pathKey, stats]) => {
+      const existing = byPath.get(pathKey) || { path: pathKey, requests: 0, inboundBytes: 0, outboundBytes: 0, errors: 0, maxOutboundBytes: 0, lastStatus: 0, lastSeenAt: "" };
+      existing.requests += Number(stats.requests || 0);
+      existing.inboundBytes += Number(stats.inboundBytes || 0);
+      existing.outboundBytes += Number(stats.outboundBytes || 0);
+      existing.errors += Number(stats.errors || 0);
+      existing.maxOutboundBytes = Math.max(Number(existing.maxOutboundBytes || 0), Number(stats.maxOutboundBytes || 0));
+      existing.lastStatus = stats.lastStatus || existing.lastStatus || 0;
+      existing.lastSeenAt = stats.lastSeenAt || existing.lastSeenAt || "";
+      byPath.set(pathKey, existing);
+      hourStats.requests += Number(stats.requests || 0);
+      hourStats.inboundBytes += Number(stats.inboundBytes || 0);
+      hourStats.outboundBytes += Number(stats.outboundBytes || 0);
+      hourStats.paths.push({ path: pathKey, requests: Number(stats.requests || 0), outboundBytes: Number(stats.outboundBytes || 0), outbound: formatBytes(stats.outboundBytes || 0) });
+      requests += Number(stats.requests || 0);
+      inboundBytes += Number(stats.inboundBytes || 0);
+      outboundBytes += Number(stats.outboundBytes || 0);
+    });
+    hourStats.inbound = formatBytes(hourStats.inboundBytes);
+    hourStats.outbound = formatBytes(hourStats.outboundBytes);
+    hourStats.paths.sort((a, b) => b.outboundBytes - a.outboundBytes || b.requests - a.requests);
+    byHour.push(hourStats);
+  });
+  return {
+    startedAt: trafficHistory.startedAt,
+    updatedAt: trafficHistory.updatedAt,
+    retentionDays: trafficHistoryDays,
+    days: safeDays,
+    requests,
+    inboundBytes,
+    outboundBytes,
+    inbound: formatBytes(inboundBytes),
+    outbound: formatBytes(outboundBytes),
+    byPath: [...byPath.values()]
+      .map((stats) => ({ ...stats, inbound: formatBytes(stats.inboundBytes), outbound: formatBytes(stats.outboundBytes), maxOutbound: formatBytes(stats.maxOutboundBytes) }))
+      .sort((a, b) => b.outboundBytes - a.outboundBytes || b.requests - a.requests),
+    byHour,
+  };
+}
+
 function resetTrafficMetrics() {
   trafficStartedAt = new Date().toISOString();
   trafficMetrics.requests = 0;
@@ -204,6 +372,7 @@ function attachTrafficMeter(req, res) {
     trafficMetrics.byPath.set(key, pathStats);
     trafficMetrics.recent.push(entry);
     if (trafficMetrics.recent.length > 500) trafficMetrics.recent.shift();
+    recordTrafficHistory(entry);
     console.log(`[traffic] ${entry.method} ${entry.path} ${entry.status} out=${formatBytes(outboundBytes)} in=${formatBytes(inboundBytes)} ${entry.durationMs}ms`);
   });
 }
@@ -216,8 +385,8 @@ function requestDatabaseVersion(req) {
   return String(req.headers["if-match"] || req.headers["x-database-version"] || "").replace(/^"|"$/g, "").trim();
 }
 
-function supabaseObjectUrl() {
-  const objectPath = supabaseDbObject.split("/").map(encodeURIComponent).join("/");
+function supabaseObjectUrl(objectName = supabaseDbObject) {
+  const objectPath = objectName.split("/").map(encodeURIComponent).join("/");
   return `${supabaseUrl}/storage/v1/object/${encodeURIComponent(supabaseBucket)}/${objectPath}`;
 }
 
@@ -2838,6 +3007,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (requestPath === "/api/traffic-usage/history" && req.method === "GET") {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const days = Number(requestUrl.searchParams.get("days") || trafficHistoryDays);
+    loadTrafficHistory()
+      .then(() => sendJson(res, 200, { ok: true, ...trafficHistorySummary(days) }))
+      .catch((error) => {
+        console.error(error);
+        sendJson(res, 500, { ok: false, error: error.message || "traffic history failed" });
+      });
+    return;
+  }
+
   if (requestPath === "/api/traffic-usage/reset" && req.method === "POST") {
     resetTrafficMetrics();
     sendJson(res, 200, { ok: true, ...trafficSummary() });
@@ -3060,4 +3241,14 @@ const server = http.createServer((req, res) => {
 server.listen(port, host, () => {
   console.log(`Sales Analytics is running on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
   console.log(useSupabase ? `Database storage: Supabase ${supabaseBucket}/${supabaseDbObject}` : `Database path: ${dbPath}`);
+});
+
+loadTrafficHistory().catch((error) => console.warn("Traffic history startup load failed", error.message));
+
+["SIGINT", "SIGTERM"].forEach((signal) => {
+  process.on(signal, () => {
+    flushTrafficHistory()
+      .catch((error) => console.warn("Traffic history final flush failed", error.message))
+      .finally(() => process.exit(0));
+  });
 });
