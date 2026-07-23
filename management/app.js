@@ -789,6 +789,7 @@ function bindEvents() {
   });
   document.getElementById("hide-selected-distribution-orders").addEventListener("click", hideSelectedDistributionOrders);
   document.querySelectorAll("[data-process-tab]").forEach((button) => button.addEventListener("click", () => {
+    if (state.processTab !== button.dataset.processTab) state.selectedProcessOrders.clear();
     state.processTab = button.dataset.processTab;
     renderOrderHistory();
   }));
@@ -2424,24 +2425,46 @@ function renderOrderProductResults() {
     list.classList.toggle("hidden", !rawQuery && !document.activeElement.isSameNode(input));
     return;
   }
+  const customerProductCount = number(scalar(`
+    SELECT COUNT(*) FROM (
+      SELECT s.sku
+      FROM sales_raw s
+      WHERE s.customer_no = ? AND s.sale_date >= ? AND s.sale_date < ? AND COALESCE(s.sku, '') <> ''
+      GROUP BY s.sku
+    )
+  `, [state.orderCustomer.customer_no, ...orderContextDateParams()]));
+  const includeGeneralProducts = customerProductCount >= 30;
   const rows = queryRows(`
-    SELECT sku, description, source_rank, quantity
+    SELECT sku, description, MIN(source_rank) AS source_rank, MAX(customer_quantity) AS customer_quantity, MAX(global_quantity) AS global_quantity
     FROM (
-      SELECT s.sku, COALESCE(MAX(s.product_desc), p.description, s.sku) AS description, 0 AS source_rank, SUM(s.quantity) AS quantity
+      SELECT s.sku, COALESCE(MAX(s.product_desc), p.description, s.sku) AS description, 0 AS source_rank, SUM(s.quantity) AS customer_quantity, COALESCE(g.global_quantity, 0) AS global_quantity
       FROM sales_raw s
       LEFT JOIN products p ON p.sku = s.sku
+      LEFT JOIN (
+        SELECT sku, SUM(quantity) AS global_quantity
+        FROM sales_raw
+        WHERE sale_date >= ? AND sale_date < ?
+        GROUP BY sku
+      ) g ON g.sku = s.sku
       WHERE s.customer_no = ? AND s.sale_date >= ? AND s.sale_date < ? AND (s.sku LIKE ? OR s.product_desc LIKE ? OR p.description LIKE ?)
       GROUP BY s.sku
       UNION
-      SELECT p.sku, COALESCE(p.description, p.sku) AS description, 1 AS source_rank, 0 AS quantity
+      SELECT p.sku, COALESCE(p.description, p.sku) AS description, 1 AS source_rank, 0 AS customer_quantity, COALESCE(g.global_quantity, 0) AS global_quantity
       FROM products p
+      LEFT JOIN (
+        SELECT sku, SUM(quantity) AS global_quantity
+        FROM sales_raw
+        WHERE sale_date >= ? AND sale_date < ?
+        GROUP BY sku
+      ) g ON g.sku = p.sku
       WHERE p.sku LIKE ? OR p.description LIKE ?
     )
     WHERE sku <> ''
+      AND (? = 1 OR source_rank = 0)
     GROUP BY sku
-    ORDER BY source_rank, quantity DESC, description
+    ORDER BY source_rank, customer_quantity DESC, global_quantity DESC, description
     LIMIT 80
-  `, [state.orderCustomer.customer_no, ...orderContextDateParams(), query, query, query, query, query]);
+  `, [...orderContextDateParams(), state.orderCustomer.customer_no, ...orderContextDateParams(), query, query, query, ...orderContextDateParams(), query, query, includeGeneralProducts ? 1 : 0]);
   list.innerHTML = rows.length
     ? rows.map((row) => `
       <button class="autocomplete-option" data-order-product="${escapeAttr(row.sku)}">
@@ -2738,29 +2761,7 @@ function renderSuggestedProducts() {
     ORDER BY quantity DESC
     LIMIT 200
   `, [customerNo, ...orderContextDateParams()]).filter((row) => row.sku && !blocked.includes(row.sku)).slice(0, 30) : [];
-  const used = new Set([...blocked, ...customerRows.map((row) => row.sku)]);
-  const fillerRows = customerRows.length < 30 ? queryRows(`
-    SELECT p.sku, COALESCE(p.description, p.sku) AS product, COALESCE(s.quantity, 0) AS quantity, COALESCE(s.weekly_quantity, 0) AS weekly_quantity, COALESCE(s.returns_percent, 0) AS returns_percent
-    FROM products p
-    LEFT JOIN (
-      SELECT
-        sku,
-        SUM(quantity) AS quantity,
-        CASE
-          WHEN julianday(MAX(sale_date)) > julianday(MIN(sale_date))
-            THEN SUM(quantity) / MAX(1, ((julianday(MAX(sale_date)) - julianday(MIN(sale_date)) + 1) / 7.0))
-          ELSE SUM(quantity) / 26.0
-        END AS weekly_quantity,
-        CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
-      FROM sales_raw
-      WHERE sale_date >= ? AND sale_date < ?
-      GROUP BY sku
-    ) s ON s.sku = p.sku
-    WHERE p.sku <> ''
-    ORDER BY COALESCE(s.quantity, 0) DESC, p.description
-    LIMIT 300
-  `, orderContextDateParams()).filter((row) => row.sku && !used.has(row.sku)).slice(0, 30 - customerRows.length) : [];
-  const rows = [...customerRows, ...fillerRows];
+  const rows = customerRows;
   renderTable("order-suggested-table", rows, [
     { key: "product", label: "מוצר", render: (row) => `<button class="suggested-product-button" data-suggested-sku="${escapeAttr(row.sku)}">${escapeHtml(row.product)}</button>` },
     { key: "weekly_quantity", label: "ממוצע שבועי", format: numberDisplay },
@@ -3282,14 +3283,16 @@ function renderPickingByProduct() {
 
 function pickingOrderItemsHtml(orderId) {
   const pending = queryRows(`
-    SELECT i.id, i.sku, i.product_desc, i.quantity, i.picked_quantity, i.note, i.is_carton, i.units_per_carton,
+    SELECT i.id, i.sku, i.product_desc, i.quantity, i.picked_quantity, i.note, i.substitute_product_id, i.is_carton, i.units_per_carton,
       p.category,
+      COALESCE(sp.description, i.substitute_product_id) AS substitute_desc,
       COALESCE(p.pick_order, 999999) AS pick_order,
       COALESCE(r.returns_percent, 0) AS returns_percent,
       o.notes AS order_notes
     FROM customer_order_items i
     JOIN customer_orders o ON o.id = i.order_id
     LEFT JOIN products p ON p.sku = i.sku
+    LEFT JOIN products sp ON sp.sku = i.substitute_product_id
     LEFT JOIN (
       SELECT sku,
         CASE WHEN COALESCE(SUM(purchase_units), 0) = 0 THEN 0 ELSE ABS(SUM(return_units) / SUM(purchase_units)) END AS returns_percent
@@ -3315,9 +3318,9 @@ function pickingOrderItemsHtml(orderId) {
       <td><button class="pick-action pick-ok" data-pick-ok="${row.id}" title="אישור ליקוט">V</button></td>
       <td><input class="pick-quantity-input" type="number" inputmode="decimal" min="0" step="0.01" value="${escapeAttr(row.picked_quantity || row.quantity || 0)}" data-pick-qty="${row.id}" /></td>
       <td class="pick-product-cell">
-        ${returnRiskDot(row.returns_percent)}<button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.product_desc)}</button>
+        ${returnRiskDot(row.returns_percent)}<button class="pick-product-button" data-substitute-item="${row.id}">${escapeHtml(row.substitute_product_id ? (row.substitute_desc || row.substitute_product_id) : row.product_desc)}</button>
+        ${row.substitute_product_id ? `<small class="pick-note">במקום: ${escapeHtml(row.product_desc)}</small>` : ""}
         ${row.is_carton ? `<small class="pick-note">כמות בקרטונים: ${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
-        ${row.substitute_product_id ? `<small class="pick-note">חלופי נבחר: ${escapeHtml(row.substitute_product_id)}</small>` : ""}
         ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
       </td>
       <td><button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button></td>
@@ -3560,7 +3563,8 @@ function handleSubstituteResult(event) {
 
 async function confirmPickingProductDialog() {
   const sku = state.selectedPickingProduct;
-  const quantity = quantityNumber(document.getElementById("substitute-quantity").value);
+  const rawQuantity = number(document.getElementById("substitute-quantity").value);
+  const quantity = Math.abs(rawQuantity);
   if (!sku || quantity <= 0) return alert("יש לבחור מוצר וכמות.");
   if (state.pickingProductMode === "substitute") {
     state.db.run(`
@@ -3571,12 +3575,24 @@ async function confirmPickingProductDialog() {
     queuePickingChange({ type: "itemSubstitute", itemId: state.substituteItemId, substituteProductId: sku, pickedQuantity: quantity });
   }
   if (state.pickingProductMode === "add") {
+    const isReturn = rawQuantity < 0;
     const product = firstRow("SELECT sku, description, base_price, standard_cost FROM products WHERE sku = ?", [sku]);
     const details = productDetailsForOrder(state.addPickingCustomerNo || "", sku);
     state.db.run(`
       INSERT INTO customer_order_items (order_id, sku, product_desc, quantity, picked_quantity, note, item_status, entry_sequence, is_carton, units_per_carton, estimated_price, estimated_profit)
-      VALUES (?, ?, ?, ?, ?, '', 'pending', ?, 0, 1, ?, ?)
-    `, [state.selectedPickingOrderId, sku, product.description || details.product_desc || sku, quantity, quantity, nextActionSequence(), details.last_price, details.profit_per_unit * quantity]);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+    `, [
+      state.selectedPickingOrderId,
+      sku,
+      product.description || details.product_desc || sku,
+      quantity,
+      isReturn ? quantity : 0,
+      isReturn ? "החזרה" : "",
+      isReturn ? "return" : "pending",
+      nextActionSequence(),
+      details.last_price,
+      details.profit_per_unit * (isReturn ? -quantity : quantity),
+    ]);
     const itemId = number(scalar("SELECT last_insert_rowid()"));
     const item = firstRow("SELECT * FROM customer_order_items WHERE id = ?", [itemId]);
     queuePickingChange({ type: "itemAdd", item });
@@ -3858,7 +3874,7 @@ async function renderOrderHistory() {
   document.querySelectorAll("[data-hide-process-order]").forEach((button) => button.addEventListener("click", () => hideProcessOrder(button.dataset.hideProcessOrder)));
   document.querySelectorAll("[data-process-stage]").forEach((input) => input.addEventListener("change", () => updateProcessStage(input)));
   bindProcessOrderSelection();
-  const missedCount = renderMissedOrders(query);
+  const missedCount = state.processTab === "missed" ? renderMissedOrders(query) : missedOrdersCount(query);
   updateProcessTabCounts({ orders: processRows.length, pending: pendingRows.length, picked: pickedRows.length, shipping: shippingRows.length, distribution: distributionRows.length, missed: missedCount });
 }
 
@@ -3920,6 +3936,21 @@ function bindProcessOrderSelection() {
     if (input.checked) state.selectedProcessOrders.add(String(input.dataset.processSelect));
     else state.selectedProcessOrders.delete(String(input.dataset.processSelect));
   }));
+}
+
+function missedOrdersCount(query) {
+  return number(scalar(`
+    SELECT COUNT(DISTINCT o.id)
+    FROM customer_orders o
+    JOIN customer_order_items i ON i.order_id = o.id
+    WHERE COALESCE(i.shortage_dismissed, 0) = 0
+      AND o.status IN ('picked', 'מוכן למשלוח', 'נשלחה')
+      AND (o.customer_name LIKE ? OR o.customer_no LIKE ? OR CAST(o.id AS TEXT) LIKE ?)
+      AND (
+        COALESCE(i.item_status, 'pending') = 'missing'
+        OR (COALESCE(i.item_status, 'pending') IN ('picked', 'substituted') AND COALESCE(i.picked_quantity, 0) < COALESCE(i.quantity, 0))
+      )
+  `, [query, query, query]));
 }
 
 function renderMissedOrders(query) {
@@ -4647,6 +4678,7 @@ async function ensureOrderReadyForShipping(orderId) {
   state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, updated_at = ? WHERE id = ?", [ORDER_STATUSES[2], now, orderId]);
   const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: ORDER_STATUSES[2], updated_at: now });
   await writeBrowserDatabase(state.db.export());
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   return result;
 }
 
@@ -4656,6 +4688,7 @@ async function unmarkInvoicePrinted(orderId) {
   const result = await patchPostgresOrder(orderId, { invoice_printed: false, status: "picked", updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   await writeBrowserDatabase(state.db.export());
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   renderOrderHistory();
 }
 
@@ -4665,6 +4698,7 @@ async function markInvoicePrinted(orderId) {
   const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: "מוכן למשלוח", updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   await writeBrowserDatabase(state.db.export());
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   renderOrderHistory();
 }
 
@@ -4675,6 +4709,7 @@ async function markOrderShipped(orderId) {
   const result = await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   await writeBrowserDatabase(state.db.export());
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   renderOrderHistory();
 }
 
@@ -4685,6 +4720,7 @@ async function hideProcessOrder(orderId) {
   const result = await patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
   await writeBrowserDatabase(state.db.export());
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   renderOrderHistory();
   renderPicking();
 }
