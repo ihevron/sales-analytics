@@ -2425,15 +2425,6 @@ function renderOrderProductResults() {
     list.classList.toggle("hidden", !rawQuery && !document.activeElement.isSameNode(input));
     return;
   }
-  const customerProductCount = number(scalar(`
-    SELECT COUNT(*) FROM (
-      SELECT s.sku
-      FROM sales_raw s
-      WHERE s.customer_no = ? AND s.sale_date >= ? AND s.sale_date < ? AND COALESCE(s.sku, '') <> ''
-      GROUP BY s.sku
-    )
-  `, [state.orderCustomer.customer_no, ...orderContextDateParams()]));
-  const includeGeneralProducts = customerProductCount >= 30;
   const rows = queryRows(`
     SELECT sku, description, MIN(source_rank) AS source_rank, MAX(customer_quantity) AS customer_quantity, MAX(global_quantity) AS global_quantity
     FROM (
@@ -2460,11 +2451,10 @@ function renderOrderProductResults() {
       WHERE p.sku LIKE ? OR p.description LIKE ?
     )
     WHERE sku <> ''
-      AND (? = 1 OR source_rank = 0)
     GROUP BY sku
     ORDER BY source_rank, customer_quantity DESC, global_quantity DESC, description
     LIMIT 80
-  `, [...orderContextDateParams(), state.orderCustomer.customer_no, ...orderContextDateParams(), query, query, query, ...orderContextDateParams(), query, query, includeGeneralProducts ? 1 : 0]);
+  `, [...orderContextDateParams(), state.orderCustomer.customer_no, ...orderContextDateParams(), query, query, query, ...orderContextDateParams(), query, query]);
   list.innerHTML = rows.length
     ? rows.map((row) => `
       <button class="autocomplete-option" data-order-product="${escapeAttr(row.sku)}">
