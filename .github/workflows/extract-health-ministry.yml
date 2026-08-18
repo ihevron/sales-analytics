@@ -1,4 +1,4 @@
-name: Extract Health Ministry Assets
+name: Apply Health Ministry Supabase Persistence
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  extract:
+  apply:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -19,16 +19,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Expand current packaged page
+
+      - name: Apply source patches
         run: |
-          node install-health-ministry.js
-          mkdir -p health-ministry-src
-          cp management/health-ministry* health-ministry-src/
-          ls -la health-ministry-src
-      - name: Commit extracted source assets
+          python3 tools/fix_frontend_patch_script.py
+          python3 -m py_compile tools/patch_health_ministry_frontend.py tools/patch_health_ministry_server.py tools/finalize_health_ministry_patch.py
+          python3 tools/patch_health_ministry_frontend.py
+          python3 tools/finalize_health_ministry_patch.py
+          python3 tools/patch_health_ministry_server.py
+
+      - name: Validate JavaScript and behavior
+        run: |
+          node --check server.js
+          node --check install-health-ministry.js
+          node --check health-ministry-src/health-ministry.js
+          node tools/test_health_ministry_persistence.js
+
+      - name: Validate Docker build
+        run: docker build --tag health-ministry-supabase-test .
+
+      - name: Commit validated implementation
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add health-ministry-src
-          git commit -m 'Extract health ministry source assets [skip ci]'
+          git rm .github/workflows/extract-health-ministry.yml
+          git rm -r tools
+          git rm health-ministry-payload-*.txt
+          git add server.js Dockerfile install-health-ministry.js health-ministry-src
+          git commit -m 'Persist Ministry of Health reference data in Supabase [skip ci]'
           git push
