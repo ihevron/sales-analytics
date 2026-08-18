@@ -1,29 +1,25 @@
 // Installs the Ministry of Health Excel page during the Docker build.
 const fs = require("fs");
 const path = require("path");
-const zlib = require("zlib");
 
-const payloadFiles = Array.from({ length: 9 }, (_, index) =>
-  `health-ministry-payload-${String(index).padStart(2, "0")}.txt`,
-);
-const payload = payloadFiles
-  .map((fileName) => fs.readFileSync(path.join(__dirname, fileName), "utf8").trim())
-  .join("");
-const files = JSON.parse(zlib.gunzipSync(Buffer.from(payload, "base64")).toString("utf8"));
+const sourceDir = path.join(__dirname, "health-ministry-src");
+const managementDir = path.join(__dirname, "management");
+const assetNames = fs.readdirSync(sourceDir).filter((name) => name.startsWith("health-ministry"));
 
-for (const [relativePath, content] of Object.entries(files)) {
-  const target = path.join(__dirname, relativePath);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, content, "utf8");
+for (const name of assetNames) {
+  const source = path.join(sourceDir, name);
+  const target = path.join(managementDir, name);
+  if (!fs.statSync(source).isFile()) continue;
+  fs.copyFileSync(source, target);
 }
 
-const indexPath = path.join(__dirname, "management", "index.html");
+const indexPath = path.join(managementDir, "index.html");
 let html = fs.readFileSync(indexPath, "utf8");
 
 if (!html.includes("health-ministry-nav.css")) {
   const marker = "  </head>";
   if (!html.includes(marker)) throw new Error("Could not find </head> in management/index.html");
-  html = html.replace(marker, `    <link rel="stylesheet" href="./health-ministry-nav.css?v=20260818b" />\n${marker}`);
+  html = html.replace(marker, `    <link rel="stylesheet" href="./health-ministry-nav.css?v=20260818c" />\n${marker}`);
 }
 
 if (!html.includes("data-health-ministry-link")) {
@@ -34,5 +30,4 @@ if (!html.includes("data-health-ministry-link")) {
 }
 
 fs.writeFileSync(indexPath, html, "utf8");
-for (const fileName of payloadFiles) fs.rmSync(path.join(__dirname, fileName), { force: true });
-console.log(`Installed Ministry of Health page (${Object.keys(files).length} assets)`);
+console.log(`Installed Ministry of Health page (${assetNames.length} assets)`);
