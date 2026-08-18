@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>יצירת קובץ משרד הבריאות</title>
+    <link rel="icon" type="image/png" href="./wa-logo.png" />
+    <link rel="apple-touch-icon" href="./wa-logo.png" />
+    <link rel="stylesheet" href="./health-ministry.css?v=20260818b" />
+    <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script defer src="./health-ministry-template.js?v=20260818b"></script>
+    <script defer src="./health-ministry.js?v=20260818b"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-header">
+        <div class="header-brand">
+          <img src="./wa-logo.png" alt="" />
+          <div>
+            <p class="eyebrow">חברון שיווק סלטים בע״מ</p>
+            <h1>יצירת קובץ משרד הבריאות</h1>
+            <p>איחוד לקוחות, משלוחים וקודי ערים לקובץ הדיווח הרשמי</p>
+          </div>
+        </div>
+        <a class="back-link" href="./">← חזרה לאפליקציית הניהול</a>
+      </header>
+
+      <main>
+        <section class="notice-card">
+          <strong>הקבצים מעובדים בדפדפן בלבד.</strong>
+          <span>קובצי הלקוחות והמשלוחים אינם נשמרים בשרת. רשימת החסימות נשמרת בדפדפן עד שתשנה או תמחק אותה.</span>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div class="step-badge">1</div>
+            <div>
+              <h2>נתונים קבועים לדיווח</h2>
+              <p>התאריך מתמלא אוטומטית לפי שעון ישראל. שאר הפרטים נשמרים לפעם הבאה בדפדפן זה.</p>
+            </div>
+          </div>
+          <form id="fixed-fields-form" class="fields-grid" autocomplete="off">
+            <label>שם הספק<input id="supplier-name" type="text" required /></label>
+            <label>ח״פ ספק<input id="supplier-vat" type="text" inputmode="numeric" required /></label>
+            <label>מספר משרד הבריאות<input id="health-license" type="text" required /></label>
+            <label>תאריך<input id="report-date" type="date" required /></label>
+            <label>מספר רכב<input id="vehicle-number" type="text" required /></label>
+            <label>שם הנהג<input id="driver-name" type="text" required /></label>
+            <label>טלפון נהג<input id="driver-phone" type="tel" required /></label>
+            <label>סוג לקוח
+              <select id="customer-type" required>
+                <option value="קמעונאי">קמעונאי</option>
+                <option value="מפעל/מחסן">מפעל/מחסן</option>
+              </select>
+            </label>
+            <label>סבב יומי<input id="daily-round" type="text" required /></label>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div class="step-badge">2</div>
+            <div>
+              <h2>טעינת מקורות הנתונים</h2>
+              <p>ניתן להעלות XLSX, XLS או CSV. האפליקציה מאתרת אוטומטית את שורת הכותרות.</p>
+            </div>
+          </div>
+          <div class="uploads-grid">
+            <label class="upload-card" for="customers-file">
+              <span class="upload-icon">👥</span>
+              <strong>קובץ לקוחות</strong>
+              <small>A מספר לקוח · B שם · E ח״פ · O כתובת · P עיר</small>
+              <input id="customers-file" type="file" accept=".xlsx,.xls,.csv" />
+              <span id="customers-file-status" class="file-status">לא נבחר קובץ</span>
+            </label>
+            <label class="upload-card" for="shipments-file">
+              <span class="upload-icon">🚚</span>
+              <strong>קובץ נתוני משלוח</strong>
+              <small>A תעודה · B לקוח · E משקל בגרמים · G כמות</small>
+              <input id="shipments-file" type="file" accept=".xlsx,.xls,.csv" />
+              <span id="shipments-file-status" class="file-status">לא נבחר קובץ</span>
+            </label>
+            <label class="upload-card" for="cities-file">
+              <span class="upload-icon">🏙️</span>
+              <strong>רשימת ערים</strong>
+              <small>A שם עיר · B קוד עיר</small>
+              <input id="cities-file" type="file" accept=".xlsx,.xls,.csv" />
+              <span id="cities-file-status" class="file-status">לא נבחר קובץ</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel" id="rules-panel">
+          <div class="panel-heading rules-heading">
+            <div class="step-badge">3</div>
+            <div>
+              <h2>לקוחות חסומים ולקוחות חליפיים</h2>
+              <p>חסימה פעילה תחול על כל תעודות המשלוח של הלקוח. אפשר להוציא אותו מהדוח לחלוטין או לדווח במקומו לקוח חליפי.</p>
+            </div>
+            <div class="heading-actions">
+              <input id="rules-import-file" type="file" accept=".xlsx,.xls,.csv" hidden />
+              <button id="rules-import-button" class="secondary-button" type="button">ייבוא רשימה</button>
+              <button id="rules-export-button" class="secondary-button" type="button">הורדת רשימת חסומים</button>
+            </div>
+          </div>
+
+          <form id="rule-form" class="rule-form" autocomplete="off">
+            <input id="rule-id" type="hidden" />
+            <label>הלקוח שיופיע בקובץ המשלוחים
+              <input id="rule-source" type="text" list="customers-datalist" placeholder="מספר לקוח או שם לקוח" required />
+            </label>
+            <label>פעולה
+              <select id="rule-action">
+                <option value="exclude">לא לכלול בדיווח</option>
+                <option value="replace">להחליף בלקוח אחר</option>
+              </select>
+            </label>
+            <label id="replacement-field" class="hidden">לקוח חליפי
+              <input id="rule-replacement" type="text" list="customers-datalist" placeholder="מספר לקוח או שם לקוח" />
+            </label>
+            <label>הערה
+              <input id="rule-notes" type="text" placeholder="אופציונלי" />
+            </label>
+            <div class="rule-form-actions">
+              <button class="primary-button" type="submit"><span id="rule-save-label">הוספת כלל</span></button>
+              <button id="rule-cancel-edit" class="ghost-button hidden" type="button">ביטול עריכה</button>
+            </div>
+          </form>
+          <datalist id="customers-datalist"></datalist>
+
+          <div class="rules-summary">
+            <span>כללים פעילים: <strong id="active-rules-count">0</strong></span>
+            <span>חסימות: <strong id="exclude-rules-count">0</strong></span>
+            <span>החלפות: <strong id="replace-rules-count">0</strong></span>
+          </div>
+          <div class="table-wrap rules-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>סטטוס</th>
+                  <th>לקוח מקור</th>
+                  <th>פעולה</th>
+                  <th>לקוח חליפי</th>
+                  <th>הערה</th>
+                  <th>עודכן</th>
+                  <th>פעולות</th>
+                </tr>
+              </thead>
+              <tbody id="rules-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel action-panel">
+          <div>
+            <h2>יצירת הדוח</h2>
+            <p>המשקל בעמודה E בקובץ המשלוחים נחשב לגרמים. החישוב הוא משקל × כמות ÷ 1,000 והתוצאה נרשמת בק״ג.</p>
+          </div>
+          <label class="allow-errors"><input id="allow-errors" type="checkbox" /> אפשר הורדה גם כאשר קיימות שגיאות התאמה</label>
+          <button id="process-button" class="generate-button" type="button">בדיקה ויצירת קבצים</button>
+          <p id="process-status" class="process-status"></p>
+        </section>
+
+        <section id="results-section" class="panel hidden">
+          <div class="panel-heading">
+            <div class="step-badge success">✓</div>
+            <div>
+              <h2>תוצאות העיבוד</h2>
+              <p id="results-subtitle"></p>
+            </div>
+          </div>
+          <div id="metrics-grid" class="metrics-grid"></div>
+          <div class="download-actions">
+            <button id="download-report" class="primary-button" type="button" disabled>הורדת קובץ משרד הבריאות</button>
+            <button id="download-blocked-activity" class="secondary-button" type="button" disabled>הורדת דוח חסומים והחלפות</button>
+            <button id="download-rules-results" class="secondary-button" type="button">הורדת רשימת הכללים</button>
+          </div>
+
+          <div class="result-tabs" role="tablist">
+            <button class="tab-button active" data-result-tab="preview" type="button">תצוגה מקדימה</button>
+            <button class="tab-button" data-result-tab="blocked" type="button">חסומים והחלפות</button>
+            <button class="tab-button" data-result-tab="issues" type="button">שגיאות ואזהרות</button>
+          </div>
+
+          <div id="preview-tab" class="result-tab active">
+            <div class="table-wrap"><table id="preview-table"></table></div>
+          </div>
+          <div id="blocked-tab" class="result-tab">
+            <div class="table-wrap"><table id="blocked-table"></table></div>
+          </div>
+          <div id="issues-tab" class="result-tab">
+            <div class="table-wrap"><table id="issues-table"></table></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+.health-ministry-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 14px;
+  color: rgba(255,255,255,.84);
+  text-decoration: none;
+  text-align: right;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+}
+.health-ministry-nav-item:hover {
+  color: #fff;
+  background: rgba(31,127,39,.42);
+  box-shadow: inset 3px 0 0 #fff;
+}
