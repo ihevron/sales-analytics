@@ -1,0 +1,34 @@
+name: Extract Health Ministry Assets
+
+on:
+  push:
+    branches:
+      - agent/health-ministry-supabase-persistence
+    paths:
+      - .github/workflows/extract-health-ministry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Expand current packaged page
+        run: |
+          node install-health-ministry.js
+          mkdir -p health-ministry-src
+          cp management/health-ministry* health-ministry-src/
+          ls -la health-ministry-src
+      - name: Commit extracted source assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add health-ministry-src
+          git commit -m 'Extract health ministry source assets [skip ci]'
+          git push
