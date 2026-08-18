@@ -8,11 +8,12 @@ ENV DATA_DIR=/data
 
 COPY package.json ./
 RUN npm install --omit=dev
-COPY index.html app.js styles.css customer.html customer.css customer.js server.js price-audit-core.js price-audit-openapi.json README.md install-health-ministry.js health-ministry-payload-00.txt health-ministry-payload-01.txt health-ministry-payload-02.txt health-ministry-payload-03.txt health-ministry-payload-04.txt health-ministry-payload-05.txt health-ministry-payload-06.txt health-ministry-payload-07.txt health-ministry-payload-08.txt ./
+COPY index.html app.js styles.css customer.html customer.css customer.js server.js price-audit-core.js price-audit-openapi.json README.md install-health-ministry.js ./
 COPY api ./api
 COPY management ./management
 COPY management-postgres ./management-postgres
-RUN node ./install-health-ministry.js && rm ./install-health-ministry.js
+COPY health-ministry-src ./health-ministry-src
+RUN node ./install-health-ministry.js && rm ./install-health-ministry.js && rm -rf ./health-ministry-src
 
 RUN mkdir -p /data
 VOLUME ["/data"]
