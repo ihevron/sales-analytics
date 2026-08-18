@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 
-const payloadFiles = Array.from({ length: 8 }, (_, index) =>
+const payloadFiles = Array.from({ length: 9 }, (_, index) =>
   `health-ministry-payload-${String(index).padStart(2, "0")}.txt`,
 );
 const payload = payloadFiles
@@ -23,7 +23,7 @@ let html = fs.readFileSync(indexPath, "utf8");
 if (!html.includes("health-ministry-nav.css")) {
   const marker = "  </head>";
   if (!html.includes(marker)) throw new Error("Could not find </head> in management/index.html");
-  html = html.replace(marker, `    <link rel="stylesheet" href="./health-ministry-nav.css?v=20260817" />\n${marker}`);
+  html = html.replace(marker, `    <link rel="stylesheet" href="./health-ministry-nav.css?v=20260818b" />\n${marker}`);
 }
 
 if (!html.includes("data-health-ministry-link")) {
