@@ -20,28 +20,37 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Apply source patches
+      - name: Apply, test and publish
+        shell: bash
         run: |
-          python3 tools/fix_frontend_patch_script.py
-          python3 -m py_compile tools/patch_health_ministry_frontend.py tools/patch_health_ministry_server.py tools/finalize_health_ministry_patch.py
-          python3 tools/patch_health_ministry_frontend.py
-          python3 tools/finalize_health_ministry_patch.py
-          python3 tools/patch_health_ministry_server.py
+          set +e
+          bash -o pipefail -c '
+            python3 tools/fix_frontend_patch_script.py &&
+            python3 -m py_compile tools/patch_health_ministry_frontend.py tools/patch_health_ministry_server.py tools/finalize_health_ministry_patch.py &&
+            python3 tools/patch_health_ministry_frontend.py &&
+            python3 tools/finalize_health_ministry_patch.py &&
+            python3 tools/patch_health_ministry_server.py &&
+            node --check server.js &&
+            node --check install-health-ministry.js &&
+            node --check health-ministry-src/health-ministry.js &&
+            node tools/test_health_ministry_persistence.js &&
+            docker build --tag health-ministry-supabase-test .
+          ' > workflow-debug.log 2>&1
+          status=$?
+          set -e
 
-      - name: Validate JavaScript and behavior
-        run: |
-          node --check server.js
-          node --check install-health-ministry.js
-          node --check health-ministry-src/health-ministry.js
-          node tools/test_health_ministry_persistence.js
-
-      - name: Validate Docker build
-        run: docker build --tag health-ministry-supabase-test .
-
-      - name: Commit validated implementation
-        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          if [ "$status" -ne 0 ]; then
+            printf '\nWorkflow failed with status %s\n' "$status" >> workflow-debug.log
+            git add workflow-debug.log
+            git commit -m 'Capture Ministry persistence workflow failure [skip ci]'
+            git push
+            exit 0
+          fi
+
+          rm -f workflow-debug.log
           git rm .github/workflows/extract-health-ministry.yml
           git rm -r tools
           git rm health-ministry-payload-*.txt
