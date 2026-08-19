@@ -32,13 +32,13 @@ for (const [relativePath, content] of Object.entries(v3Files)) {
   fs.writeFileSync(target, content, "utf8");
 }
 
-const templatePayloadFiles = Array.from({ length: 9 }, (_, index) =>
-  `health-ministry-template-v2-${String(index).padStart(2, "0")}.txt`,
+const templatePayloadFiles = Array.from({ length: 5 }, (_, index) =>
+  `health-ministry-template-gzip-${String(index).padStart(2, "0")}.txt`,
 );
-const templateBase64 = joinPayload(templatePayloadFiles);
+const templateGzipBase64 = joinPayload(templatePayloadFiles);
 fs.writeFileSync(
   path.join(__dirname, "management", "health-ministry-template.xlsx"),
-  Buffer.from(templateBase64, "base64"),
+  zlib.gunzipSync(Buffer.from(templateGzipBase64, "base64")),
 );
 
 const indexPath = path.join(__dirname, "management", "index.html");
