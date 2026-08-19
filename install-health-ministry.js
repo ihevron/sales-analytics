@@ -32,8 +32,8 @@ for (const [relativePath, content] of Object.entries(v3Files)) {
   fs.writeFileSync(target, content, "utf8");
 }
 
-const templatePayloadFiles = Array.from({ length: 5 }, (_, index) =>
-  `health-ministry-template-${String(index).padStart(2, "0")}.txt`,
+const templatePayloadFiles = Array.from({ length: 9 }, (_, index) =>
+  `health-ministry-template-v2-${String(index).padStart(2, "0")}.txt`,
 );
 const templateBase64 = joinPayload(templatePayloadFiles);
 fs.writeFileSync(
