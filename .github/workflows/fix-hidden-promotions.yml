@@ -3,7 +3,7 @@ name: Fix hidden products in promotions
 on:
   push:
     paths:
-      - '.github/workflows/fix-hidden-promotions.yml'
+      - .github/workflows/fix-hidden-promotions.yml
   workflow_dispatch:
 
 permissions:
@@ -17,25 +17,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Patch promotions filter
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('management/app.js')
-          s = p.read_text()
-          old = '''    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0
-      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
-    ORDER BY updated_at DESC, p.description ASC'''
-          new = '''    WHERE COALESCE(s.hidden, p.hidden, 0) = 0
-      AND (
-        COALESCE(s.sale_price, p.sale_price, 0) > 0
-        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
-      )
-    ORDER BY updated_at DESC, p.description ASC'''
-          if old not in s:
-              raise SystemExit('expected promotions query not found')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-          PY
+        shell: bash
+        run: python3 -c "from pathlib import Path; p=Path('management/app.js'); s=p.read_text(); old='    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0\\n      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0\\n    ORDER BY updated_at DESC, p.description ASC'; new='    WHERE COALESCE(s.hidden, p.hidden, 0) = 0\\n      AND (\\n        COALESCE(s.sale_price, p.sale_price, 0) > 0\\n        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0\\n      )\\n    ORDER BY updated_at DESC, p.description ASC'; assert old in s, 'expected promotions query not found'; p.write_text(s.replace(old,new,1))"
       - name: Syntax check
         run: node --check management/app.js
       - name: Commit fix
