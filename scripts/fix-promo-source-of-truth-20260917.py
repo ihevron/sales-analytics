@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# One-time patch for customer-facing promotion source of truth.
+
 
 def replace_once(text, old, new, label):
     if old not in text:
