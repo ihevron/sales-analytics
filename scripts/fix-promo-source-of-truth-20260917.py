@@ -1,130 +1,93 @@
 from pathlib import Path
 
-# One-time patch for customer-facing promotion source of truth.
-
-
-def replace_once(text, old, new, label):
-    if old not in text:
-        raise SystemExit(f"missing pattern: {label}")
-    return text.replace(old, new, 1)
+# Patch customer app to prefer current Postgres customer-product settings over stale SQLite settings.
 
 server_path = Path('server.js')
 server = server_path.read_text()
 
-server = replace_once(
-    server,
-    '      settingsSelect("sale_price", columns.has("sale_price") ? "p.sale_price" : "0"),\n      settingsSelect("promo_discount_percent", columns.has("promo_discount_percent") ? "p.promo_discount_percent" : "0"),',
-    '      settingsSelect("sale_price", "0"),\n      settingsSelect("promo_discount_percent", "0"),',
-    'customer product promo fallback',
-)
+helper_marker = 'async function handleCustomerProducts(req, res) {'
+helper_code = '''async function loadCustomerProductSettingsOverride() {
+  if (!usePostgresPreview) return null;
+  try {
+    const rows = await postgresRows("product_customer_settings?select=sku,sale_price,promo_discount_percent,hidden,customer_recommended,updated_at&limit=10000");
+    return new Map(rows.map((row) => [String(row.sku || ""), row]));
+  } catch (error) {
+    console.warn("customer product settings override unavailable", error.message || error);
+    return null;
+  }
+}
 
-old_existing = '''    if (!missingSkus.length) continue;
-    const fallbackChunk = missingSkus.map((sku) => `"${sku.replaceAll('"', '\\\\"')}"`).join(",");
-    try {
-      const rows = await postgresRows(`products?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${fallbackChunk})&limit=1000`);
-      rows.forEach((row) => {
-        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
-      });
-    } catch (error) {
-      if (!/promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rows = await postgresRows(`products?select=sku,sale_price&sku=in.(${fallbackChunk})&limit=1000`);
-      rows.forEach((row) => {
-        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
-      });
-    }
-'''
-new_existing = '''    if (!missingSkus.length) continue;
-    const fallbackChunk = missingSkus.map((sku) => `"${sku.replaceAll('"', '\\\\"')}"`).join(",");
-    try {
-      const rows = await postgresRows(`products?select=sku,customer_recommended,hidden&sku=in.(${fallbackChunk})&limit=1000`);
-      rows.forEach((row) => {
-        if (!settings.has(String(row.sku))) settings.set(String(row.sku), {
-          sku: row.sku,
-          sale_price: 0,
-          promo_discount_percent: 0,
-          customer_recommended: numberValue(row.customer_recommended) ? 1 : 0,
-          hidden: numberValue(row.hidden) ? 1 : 0,
-        });
-      });
-    } catch (error) {
-      if (!/customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      missingSkus.forEach((sku) => {
-        if (!settings.has(String(sku))) settings.set(String(sku), {
-          sku,
-          sale_price: 0,
-          promo_discount_percent: 0,
-          customer_recommended: 0,
-          hidden: 0,
-        });
-      });
-    }
-'''
-server = replace_once(server, old_existing, new_existing, 'settings fallback')
+function applyCustomerProductSettingsOverride(row, settings) {
+  if (!settings) return row;
+  const saved = settings.get(String(row.sku || ""));
+  if (!saved) {
+    return { ...row, sale_price: 0, promo_discount_percent: 0 };
+  }
+  return {
+    ...row,
+    sale_price: numberValue(saved.sale_price),
+    promo_discount_percent: numberValue(saved.promo_discount_percent),
+    hidden: numberValue(saved.hidden) ? 1 : 0,
+    customer_recommended: numberValue(saved.customer_recommended) ? 1 : 0,
+  };
+}
 
-old_patch = '''  const productPatch = { updated_at: input.updated_at };
-  ["sale_price", "promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
-    if (hasInput(key)) productPatch[key] = input[key];
-  });
 '''
-new_patch = '''  const productPatch = { updated_at: input.updated_at };
-  if (hasInput("sale_price")) productPatch.promo_price = numberValue(input.sale_price);
-  ["promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
-    if (hasInput(key)) productPatch[key] = input[key];
-  });
-'''
-server = replace_once(server, old_patch, new_patch, 'products mirror patch')
+if 'async function loadCustomerProductSettingsOverride()' not in server:
+    if helper_marker not in server:
+        raise SystemExit('handleCustomerProducts marker missing')
+    server = server.replace(helper_marker, helper_code + helper_marker, 1)
 
-old_order = '''  const products = await withCurrentDatabase((db) => {
-    const columns = columnsFor(db, "products");
-    const select = [
-      "sku",
-      "description",
-      "standard_cost",
-      columns.has("base_price") ? "base_price" : "0 AS base_price",
-      columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
-      columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
-      columns.has("promo_discount_percent") ? "promo_discount_percent" : "0 AS promo_discount_percent",
-      columns.has("units_per_carton") ? "units_per_carton" : "1 AS units_per_carton",
-    ].join(", ");
-    const skus = [...new Set(normalizedItems.map((item) => item.sku))];
-    const placeholders = skus.map(() => "?").join(",");
-    return sqliteRows(db, `SELECT ${select} FROM products WHERE sku IN (${placeholders})`, skus);
-  });
+limit_line = '  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 3000);\n'
+if 'const postgresCustomerProductSettings = await loadCustomerProductSettingsOverride();' not in server:
+    if limit_line not in server:
+        raise SystemExit('customer products limit line missing')
+    server = server.replace(limit_line, limit_line + '  const postgresCustomerProductSettings = await loadCustomerProductSettingsOverride();\n', 1)
+
+visible_line = '    const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);\n'
+if 'const effectiveProducts = all.map((row) => applyCustomerProductSettingsOverride(row, postgresCustomerProductSettings));' not in server:
+    if visible_line not in server:
+        raise SystemExit('visibleProducts line missing')
+    server = server.replace(
+        visible_line,
+        '    const effectiveProducts = all.map((row) => applyCustomerProductSettingsOverride(row, postgresCustomerProductSettings));\n'
+        '    const visibleProducts = effectiveProducts.filter((row) => numberValue(row.hidden) !== 1);\n',
+        1,
+    )
+
+terms_block = '''  if (shouldRequireTermsAcceptance(profile, termsVersion)) {
+    sendJson(res, 403, { ok: false, error: "terms_required" });
+    return;
+  }
+
+  const products = await withCurrentDatabase((db) => {
 '''
-new_order = '''  const products = await withCurrentDatabase((db) => {
-    const columns = columnsFor(db, "products");
-    const hasProductSettings = tableExists(db, "product_customer_settings");
-    const select = [
-      "p.sku",
-      "p.description",
-      "p.standard_cost",
-      columns.has("base_price") ? "p.base_price" : "0 AS base_price",
-      columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
-      hasProductSettings ? "COALESCE(pcs.sale_price, 0) AS sale_price" : "0 AS sale_price",
-      hasProductSettings ? "COALESCE(pcs.promo_discount_percent, 0) AS promo_discount_percent" : "0 AS promo_discount_percent",
-      columns.has("units_per_carton") ? "p.units_per_carton" : "1 AS units_per_carton",
-    ].join(", ");
-    const skus = [...new Set(normalizedItems.map((item) => item.sku))];
-    const placeholders = skus.map(() => "?").join(",");
-    return sqliteRows(db, `
-      SELECT ${select}
-      FROM products p
-      ${hasProductSettings ? "LEFT JOIN product_customer_settings pcs ON pcs.sku = p.sku" : ""}
-      WHERE p.sku IN (${placeholders})
-    `, skus);
-  });
-'''
-server = replace_once(server, old_order, new_order, 'customer order product pricing')
+if 'const postgresOrderProductSettings = await loadCustomerProductSettingsOverride();' not in server:
+    if terms_block not in server:
+        raise SystemExit('customer order terms block missing')
+    server = server.replace(
+        terms_block,
+        '''  if (shouldRequireTermsAcceptance(profile, termsVersion)) {
+    sendJson(res, 403, { ok: false, error: "terms_required" });
+    return;
+  }
+
+  const postgresOrderProductSettings = await loadCustomerProductSettingsOverride();
+  const products = await withCurrentDatabase((db) => {
+''',
+        1,
+    )
+
+by_sku_line = '  const bySku = new Map(products.map((product) => [String(product.sku || ""), product]));\n'
+if 'const effectiveOrderProducts = products.map((product) => applyCustomerProductSettingsOverride(product, postgresOrderProductSettings));' not in server:
+    if by_sku_line not in server:
+        raise SystemExit('order bySku line missing')
+    server = server.replace(
+        by_sku_line,
+        '  const effectiveOrderProducts = products.map((product) => applyCustomerProductSettingsOverride(product, postgresOrderProductSettings));\n'
+        '  const bySku = new Map(effectiveOrderProducts.map((product) => [String(product.sku || ""), product]));\n',
+        1,
+    )
+
 server_path.write_text(server)
-
-management_path = Path('management/app.js')
-management = management_path.read_text()
-count_sale = management.count('COALESCE(s.sale_price, p.sale_price, 0)')
-count_disc = management.count('COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0)')
-if count_sale < 1 or count_disc < 1:
-    raise SystemExit(f'expected management promo fallbacks not found: sale={count_sale} disc={count_disc}')
-management = management.replace('COALESCE(s.sale_price, p.sale_price, 0)', 'COALESCE(s.sale_price, 0)')
-management = management.replace('COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0)', 'COALESCE(s.promo_discount_percent, 0)')
-management_path.write_text(management)
-
-print(f'patched server.js and management/app.js; management replacements sale={count_sale}, discount={count_disc}')
+print('patched customer promotions runtime source-of-truth')
