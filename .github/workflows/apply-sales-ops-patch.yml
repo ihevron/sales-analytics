@@ -3,7 +3,7 @@ name: Apply sales ops patch
 on:
   push:
     paths:
-      - 'scripts/patch-sales-ops-20260917.js'
+      - 'scripts/patch-sales-ops-20260917.py'
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: '20'
       - name: Apply targeted patch
-        run: node scripts/patch-sales-ops-20260917.js
+        run: python3 scripts/patch-sales-ops-20260917.py
       - name: Syntax checks
         run: node --check server.js && node --check management/app.js
       - name: Commit patched application
