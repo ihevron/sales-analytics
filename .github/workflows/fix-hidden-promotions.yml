@@ -1,0 +1,47 @@
+name: Fix hidden products in promotions
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-hidden-promotions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch promotions filter
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('management/app.js')
+          s = p.read_text()
+          old = '''    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0
+      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+    ORDER BY updated_at DESC, p.description ASC'''
+          new = '''    WHERE COALESCE(s.hidden, p.hidden, 0) = 0
+      AND (
+        COALESCE(s.sale_price, p.sale_price, 0) > 0
+        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+      )
+    ORDER BY updated_at DESC, p.description ASC'''
+          if old not in s:
+              raise SystemExit('expected promotions query not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Syntax check
+        run: node --check management/app.js
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add management/app.js
+          git commit -m "Hide hidden products from promotions list"
+          git push
