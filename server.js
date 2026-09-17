@@ -2057,13 +2057,14 @@ function normalizePostgresOrderItem(row) {
   };
 }
 
-async function mirrorOrderToPostgres(orderRow, itemRows, callRow = null) {
+async function mirrorOrderToPostgres(orderRow, itemRows, callRows = []) {
   if (!usePostgresPreview || !orderRow?.id) return { ok: true, skipped: true };
+  const normalizedCallRows = Array.isArray(callRows) ? callRows.filter(Boolean) : (callRows ? [callRows] : []);
   try {
     await postgresUpsert("customer_orders", [normalizePostgresOrder(orderRow)], "id");
     await postgresUpsert("customer_order_items", itemRows.map(normalizePostgresOrderItem), "id");
-    if (callRow) await postgresUpsert("customer_calls", [callRow], "call_date,customer_no");
-    return { ok: true, orderId: numberValue(orderRow.id), items: itemRows.length };
+    if (normalizedCallRows.length) await postgresUpsert("customer_calls", normalizedCallRows, "call_date,customer_no");
+    return { ok: true, orderId: numberValue(orderRow.id), items: itemRows.length, calls: normalizedCallRows.length };
   } catch (error) {
     console.error("postgres order mirror failed", error);
     return { ok: false, error: friendlyPostgresError(error), rawError: error.message || "postgres order mirror failed" };
@@ -2193,6 +2194,7 @@ async function notifyNewOrder(orderRow) {
 async function handleOrderDelta(payload, res) {
   const order = payload && typeof payload.order === "object" ? payload.order : null;
   const items = Array.isArray(payload?.items) ? payload.items : [];
+  const calls = Array.isArray(payload?.calls) ? payload.calls.filter(Boolean) : (payload?.call ? [payload.call] : []);
   if (!order) {
     sendJson(res, 400, { ok: false, error: "missing order" });
     return;
@@ -2255,8 +2257,7 @@ async function handleOrderDelta(payload, res) {
       });
     }
 
-    if (payload.call) {
-      const call = payload.call;
+    calls.forEach((call) => {
       db.run("DELETE FROM customer_calls WHERE customer_no = ? AND call_date = ?", [String(call.customer_no || order.customer_no || ""), String(call.call_date || "")]);
       db.run(`
         INSERT INTO customer_calls (call_date, customer_no, customer_name, status, call_again_time, whatsapp_sent_at, manual_order_id, notes, updated_at)
@@ -2272,29 +2273,25 @@ async function handleOrderDelta(payload, res) {
         String(call.notes || ""),
         String(call.updated_at || now),
       ]);
-    }
+    });
 
     db.run("COMMIT");
     const savedOrderRows = sqliteRows(db, "SELECT * FROM customer_orders WHERE id = ?", [orderId]);
     const savedItemRows = sqliteRows(db, "SELECT * FROM customer_order_items WHERE order_id = ? ORDER BY id", [orderId]);
     const exported = Buffer.from(db.export());
     await writeCurrentDatabaseBuffer(exported);
-    let postgresCall = null;
-    if (payload.call) {
-      const call = payload.call;
-      postgresCall = {
-        call_date: String(call.call_date || ""),
-        customer_no: String(call.customer_no || order.customer_no || ""),
-        customer_name: String(call.customer_name || order.customer_name || ""),
-        status: String(call.status || "ordered"),
-        call_again_time: call.call_again_time || null,
-        whatsapp_sent_at: call.whatsapp_sent_at || null,
-        manual_order_id: numberValue(call.manual_order_id) || orderId || null,
-        notes: String(call.notes || ""),
-        updated_at: String(call.updated_at || now),
-      };
-    }
-    const postgresResult = await mirrorOrderToPostgres(savedOrderRows[0], savedItemRows, postgresCall);
+    const postgresCalls = calls.map((call) => ({
+      call_date: String(call.call_date || ""),
+      customer_no: String(call.customer_no || order.customer_no || ""),
+      customer_name: String(call.customer_name || order.customer_name || ""),
+      status: String(call.status || "ordered"),
+      call_again_time: call.call_again_time || null,
+      whatsapp_sent_at: call.whatsapp_sent_at || null,
+      manual_order_id: numberValue(call.manual_order_id) || orderId || null,
+      notes: String(call.notes || ""),
+      updated_at: String(call.updated_at || now),
+    }));
+    const postgresResult = await mirrorOrderToPostgres(savedOrderRows[0], savedItemRows, postgresCalls);
     let push = { ok: true, skipped: true };
     if (createdOrder) {
       try {
@@ -2310,7 +2307,8 @@ async function handleOrderDelta(payload, res) {
       applied: 1,
       order: savedOrderRows[0] || null,
       items: savedItemRows,
-      call: postgresCall,
+      call: postgresCalls[0] || null,
+      calls: postgresCalls,
       postgres: postgresResult,
       push,
     });
@@ -2790,7 +2788,7 @@ async function handleCustomerProducts(req, res) {
         .sort(compareByDisplayOrder);
       sourceRows = [...manuallyRecommended, ...customerTop, ...fallbackTop];
     } else if (section === "deals") {
-      sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0 || numberValue(row.customer_recommended) > 0));
+      sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
     } else if (section === "returns") {
       sourceRows = sortProducts(baseRows.filter((row) => numberValue(row.recent_customer_quantity) > 0));
     } else {
@@ -2830,6 +2828,64 @@ async function handleCustomerProducts(req, res) {
   });
 
   sendJson(res, 200, { ok: true, ...result });
+}
+
+function jerusalemCalendarNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), Number(values.hour) || 0));
+}
+
+function customerCallDayIndexes(raw) {
+  const aliases = new Map([
+    ["א", 0], ["א׳", 0], ["א'", 0], ["ראשון", 0],
+    ["ב", 1], ["ב׳", 1], ["ב'", 1], ["שני", 1],
+    ["ג", 2], ["ג׳", 2], ["ג'", 2], ["שלישי", 2],
+    ["ד", 3], ["ד׳", 3], ["ד'", 3], ["רביעי", 3],
+    ["ה", 4], ["ה׳", 4], ["ה'", 4], ["חמישי", 4],
+  ]);
+  return [...new Set(String(raw || "").split(/[,;|/\s]+/).map((value) => aliases.get(value.trim())).filter((value) => Number.isInteger(value)))];
+}
+
+async function customerPortalCallRows(customerNo, customerName, nowIso) {
+  const rawDays = await withCurrentDatabase((db) => {
+    if (!tableExists(db, "customer_call_profiles")) return "";
+    const columns = columnsFor(db, "customer_call_profiles");
+    const dayColumn = columns.has("call_days") ? "call_days" : (columns.has("days") ? "days" : "NULL");
+    const rows = sqliteRows(db, `SELECT ${dayColumn} AS call_days FROM customer_call_profiles WHERE customer_no = ? LIMIT 1`, [customerNo]);
+    return String(rows[0]?.call_days || "");
+  });
+  const dayIndexes = customerCallDayIndexes(rawDays);
+  if (!dayIndexes.length) {
+    return [{ call_date: currentDateIso(), customer_no: customerNo, customer_name: customerName, status: "ordered", manual_order_id: null, notes: "הזמנה מהאפליקציה", updated_at: nowIso }];
+  }
+  const reference = jerusalemCalendarNow();
+  if (reference.getUTCDay() > 4 || (reference.getUTCDay() === 4 && reference.getUTCHours() >= 23)) {
+    reference.setUTCDate(reference.getUTCDate() + 7);
+  }
+  reference.setUTCHours(0, 0, 0, 0);
+  const sunday = new Date(reference);
+  sunday.setUTCDate(sunday.getUTCDate() - sunday.getUTCDay());
+  return dayIndexes.map((dayIndex) => {
+    const date = new Date(sunday);
+    date.setUTCDate(date.getUTCDate() + dayIndex);
+    return {
+      call_date: date.toISOString().slice(0, 10),
+      customer_no: customerNo,
+      customer_name: customerName,
+      status: "ordered",
+      manual_order_id: null,
+      notes: "הזמנה מהאפליקציה",
+      updated_at: nowIso,
+    };
+  });
 }
 
 async function handleCustomerOrder(payload, req, res) {
@@ -2910,6 +2966,7 @@ async function handleCustomerOrder(payload, req, res) {
   const customerName = String(profile.customer_name || session.customer_no);
   const note = String(payload?.note || "").trim();
 
+  const callRows = await customerPortalCallRows(session.customer_no, customerName, now);
   return handleOrderDelta({
     order: {
       client_order_key: `customer-${session.customer_no}-${Date.now()}`,
@@ -2917,22 +2974,138 @@ async function handleCustomerOrder(payload, req, res) {
       customer_no: session.customer_no,
       customer_name: customerName,
       status: "מוכן לאיסוף",
-      notes: note ? `הזמנה מאזור לקוח. ${note}` : "הזמנה מאזור לקוח",
+      notes: note ? `הזמנה מהאפליקציה. ${note}` : "הזמנה מהאפליקציה",
       estimated_total: subtotal,
       estimated_profit: profit,
       updated_at: now,
     },
     items: orderItems,
-    call: {
-      call_date: currentDateIso(),
-      customer_no: session.customer_no,
-      customer_name: customerName,
-      status: "ordered",
-      manual_order_id: null,
-      notes: "הזמנה מאזור לקוח",
-      updated_at: now,
-    },
+    calls: callRows,
   }, res);
+}
+
+async function handleOrdersMerge(payload, res) {
+  const targetId = numberValue(payload?.targetOrderId);
+  const sourceId = numberValue(payload?.sourceOrderId);
+  if (!targetId || !sourceId || targetId === sourceId) {
+    sendJson(res, 400, { ok: false, error: "יש לבחור שתי הזמנות שונות" });
+    return;
+  }
+
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  const now = new Date().toISOString();
+  try {
+    ensureServerColumn(db, "customer_orders", "process_hidden", "INTEGER NOT NULL DEFAULT 0");
+    const orders = sqliteRows(db, "SELECT * FROM customer_orders WHERE id IN (?, ?)", [targetId, sourceId]);
+    const target = orders.find((row) => numberValue(row.id) === targetId);
+    const source = orders.find((row) => numberValue(row.id) === sourceId);
+    if (!target || !source) {
+      sendJson(res, 404, { ok: false, error: "אחת ההזמנות לא נמצאה" });
+      return;
+    }
+    if (String(target.customer_no || "") !== String(source.customer_no || "")) {
+      sendJson(res, 409, { ok: false, error: "אפשר לאחד רק הזמנות של אותו לקוח" });
+      return;
+    }
+    if (String(target.status || "") !== "מוכן לאיסוף" || String(source.status || "") !== "מוכן לאיסוף" || target.shipped_at || source.shipped_at || numberValue(target.process_hidden) || numberValue(source.process_hidden)) {
+      sendJson(res, 409, { ok: false, error: "אפשר לאחד רק הזמנות פתוחות שעדיין בליקוט" });
+      return;
+    }
+    const sourceStarted = numberValue(sqliteRows(db, `
+      SELECT COUNT(*) AS count
+      FROM customer_order_items
+      WHERE order_id = ?
+        AND COALESCE(item_status, 'pending') NOT IN ('pending', 'return')
+    `, [sourceId])[0]?.count)
+      + numberValue(sqliteRows(db, "SELECT COUNT(*) AS count FROM customer_order_items WHERE order_id = ? AND COALESCE(picked_quantity, 0) > 0 AND COALESCE(item_status, 'pending') <> 'return'", [sourceId])[0]?.count);
+    if (sourceStarted > 0) {
+      sendJson(res, 409, { ok: false, error: "אי אפשר לאחד את ההזמנה הנוספת אחרי שהתחילו ללקט אותה" });
+      return;
+    }
+
+    db.run("BEGIN TRANSACTION");
+    const targetItems = sqliteRows(db, "SELECT * FROM customer_order_items WHERE order_id = ? ORDER BY id", [targetId]);
+    const sourceItems = sqliteRows(db, "SELECT * FROM customer_order_items WHERE order_id = ? ORDER BY id", [sourceId]);
+    const deletedSourceItemIds = [];
+    sourceItems.forEach((item) => {
+      const sourceIsReturn = String(item.item_status || "pending") === "return";
+      const match = targetItems.find((candidate) => {
+        const candidateStatus = String(candidate.item_status || "pending");
+        const candidateIsReturn = candidateStatus === "return";
+        const statusCompatible = sourceIsReturn ? candidateIsReturn : ["pending", "picked"].includes(candidateStatus);
+        return String(candidate.sku || "") === String(item.sku || "")
+          && sourceIsReturn === candidateIsReturn
+          && statusCompatible
+          && numberValue(candidate.is_carton) === numberValue(item.is_carton)
+          && numberValue(candidate.units_per_carton || 1) === numberValue(item.units_per_carton || 1)
+          && !String(candidate.substitute_product_id || "")
+          && !String(item.substitute_product_id || "");
+      });
+      if (match) {
+        const mergedNote = [String(match.note || "").trim(), String(item.note || "").trim(), `תוספת מהזמנה #${sourceId}`].filter(Boolean).join(" | ");
+        const mergedQuantity = numberValue(match.quantity) + numberValue(item.quantity);
+        const keepPending = !sourceIsReturn && numberValue(match.picked_quantity) < mergedQuantity;
+        db.run(`
+          UPDATE customer_order_items
+          SET quantity = ?, estimated_price = ?, estimated_profit = ?, note = ?, item_status = ?, action_sequence = ?
+          WHERE id = ?
+        `, [
+          mergedQuantity,
+          numberValue(match.estimated_price) + numberValue(item.estimated_price),
+          numberValue(match.estimated_profit) + numberValue(item.estimated_profit),
+          mergedNote,
+          keepPending ? "pending" : String(match.item_status || "pending"),
+          keepPending ? null : match.action_sequence,
+          numberValue(match.id),
+        ]);
+        match.quantity = mergedQuantity;
+        match.estimated_price = numberValue(match.estimated_price) + numberValue(item.estimated_price);
+        match.estimated_profit = numberValue(match.estimated_profit) + numberValue(item.estimated_profit);
+        match.note = mergedNote;
+        match.item_status = keepPending ? "pending" : String(match.item_status || "pending");
+        match.action_sequence = keepPending ? null : match.action_sequence;
+        db.run("DELETE FROM customer_order_items WHERE id = ?", [numberValue(item.id)]);
+        deletedSourceItemIds.push(numberValue(item.id));
+      } else {
+        db.run("UPDATE customer_order_items SET order_id = ? WHERE id = ?", [targetId, numberValue(item.id)]);
+        targetItems.push({ ...item, order_id: targetId });
+      }
+    });
+
+    const totals = sqliteRows(db, `
+      SELECT COALESCE(SUM(estimated_price), 0) AS total, COALESCE(SUM(estimated_profit), 0) AS profit
+      FROM customer_order_items WHERE order_id = ?
+    `, [targetId])[0] || {};
+    const targetNotes = [String(target.notes || "").trim(), `אוחדה עם הזמנה #${sourceId}`].filter(Boolean).join(" | ");
+    const sourceNotes = [String(source.notes || "").trim(), `אוחדה להזמנה #${targetId}`].filter(Boolean).join(" | ");
+    db.run("UPDATE customer_orders SET notes = ?, estimated_total = ?, estimated_profit = ?, updated_at = ? WHERE id = ?", [targetNotes, numberValue(totals.total), numberValue(totals.profit), now, targetId]);
+    db.run("UPDATE customer_orders SET process_hidden = 1, notes = ?, updated_at = ? WHERE id = ?", [sourceNotes, now, sourceId]);
+    db.run("COMMIT");
+
+    const targetOrderRows = sqliteRows(db, "SELECT * FROM customer_orders WHERE id = ?", [targetId]);
+    const targetItemRows = sqliteRows(db, "SELECT * FROM customer_order_items WHERE order_id = ? ORDER BY id", [targetId]);
+    const exported = Buffer.from(db.export());
+    await writeCurrentDatabaseBuffer(exported);
+
+    if (usePostgresPreview) {
+      await postgresUpsert("customer_orders", [normalizePostgresOrder(targetOrderRows[0])], "id");
+      await postgresUpsert("customer_order_items", targetItemRows.map(normalizePostgresOrderItem), "id");
+      await postgresPatchWithColumnFallback("customer_orders", `id=eq.${encodeURIComponent(sourceId)}`, { process_hidden: 1, notes: sourceNotes, updated_at: now }, ["process_hidden", "updated_at"]);
+      if (deletedSourceItemIds.length) {
+        await postgresRest(`customer_order_items?id=in.(${deletedSourceItemIds.join(",")})`, { method: "DELETE" });
+      }
+    }
+
+    sendJson(res, 200, { ok: true, targetOrderId: targetId, sourceOrderId: sourceId, mergedItems: sourceItems.length });
+  } catch (error) {
+    try { db.run("ROLLBACK"); } catch {}
+    console.error("merge orders failed", error);
+    sendJson(res, 500, { ok: false, error: error.message || "איחוד ההזמנות נכשל" });
+  } finally {
+    db.close();
+  }
 }
 
 function handleStatic(req, res) {
@@ -3053,6 +3226,11 @@ const server = http.createServer((req, res) => {
 
   if (requestPath === "/api/order-delta" && req.method === "POST") {
     handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrderDelta(payload, res)));
+    return;
+  }
+
+  if (requestPath === "/api/orders-merge" && req.method === "POST") {
+    handleJsonPost(req, res, (payload) => enqueueDbMutation(() => handleOrdersMerge(payload, res)));
     return;
   }
 

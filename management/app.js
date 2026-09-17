@@ -3084,6 +3084,7 @@ async function renderPicking() {
     SELECT
       o.id AS order_id,
       o.order_date,
+      o.customer_no,
       o.customer_name,
       o.status,
       COUNT(CASE WHEN COALESCE(i.item_status, 'pending') <> 'return' THEN i.id END) AS item_count,
@@ -3096,7 +3097,7 @@ async function renderPicking() {
       AND COALESCE(o.shipped_at, '') = ''
       AND COALESCE(o.process_hidden, 0) = 0
     GROUP BY o.id
-    ORDER BY o.id DESC
+    ORDER BY o.order_date ASC, o.id ASC
     LIMIT 250
   `);
   const list = document.getElementById("picking-list");
@@ -3109,6 +3110,9 @@ async function renderPicking() {
     state.selectedPickingOrderId = orders[0].order_id;
   }
   const selected = orders.find((order) => String(order.order_id) === String(state.selectedPickingOrderId)) || orders[0];
+  const sameCustomerOrders = orders.filter((order) => String(order.customer_no || "") === String(selected.customer_no || ""));
+  const mergeTarget = sameCustomerOrders.length > 1 ? sameCustomerOrders[0] : null;
+  const mergeSource = sameCustomerOrders.length > 1 ? sameCustomerOrders[sameCustomerOrders.length - 1] : null;
   list.innerHTML = `
     <div class="picking-tabs picking-order-selector">
       <label>
@@ -3132,6 +3136,7 @@ async function renderPicking() {
           <span>${integer(selected.item_count)} שורות</span>
           <span>${numberDisplay(selected.total_units)} יחידות</span>
           <span>${numberDisplay(selected.picked_quantity)} / ${numberDisplay(selected.total_quantity)} לוקטו</span>
+          ${mergeTarget && mergeSource ? `<button class="secondary-action" type="button" data-merge-order-target="${escapeAttr(mergeTarget.order_id)}" data-merge-order-source="${escapeAttr(mergeSource.order_id)}">אחד 2 הזמנות</button>` : ""}
         </div>
       </div>
       ${pickingOrderItemsHtml(selected.order_id)}
@@ -3141,7 +3146,37 @@ async function renderPicking() {
     state.selectedPickingOrderId = event.target.value;
     renderPicking();
   });
+  document.querySelector("[data-merge-order-source]")?.addEventListener("click", (event) => mergePickingOrders(
+    event.currentTarget.dataset.mergeOrderTarget,
+    event.currentTarget.dataset.mergeOrderSource,
+  ));
   bindPickingActions();
+}
+
+async function mergePickingOrders(targetOrderId, sourceOrderId) {
+  if (!targetOrderId || !sourceOrderId) return;
+  if (!confirm(`לאחד את הזמנה #${sourceOrderId} לתוך הזמנה #${targetOrderId}?`)) return;
+  try {
+    const response = await fetch("/api/orders-merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetOrderId: number(targetOrderId), sourceOrderId: number(sourceOrderId) }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || "איחוד ההזמנות נכשל");
+    state.selectedPickingOrderId = String(data.targetOrderId || targetOrderId);
+    if (typeof reloadDatabaseFromServer === "function") {
+      await reloadDatabaseFromServer();
+    } else {
+      window.location.reload();
+      return;
+    }
+    await renderPicking();
+    await renderOrderHistory();
+    alert(`הזמנה #${sourceOrderId} אוחדה בהצלחה להזמנה #${targetOrderId}`);
+  } catch (error) {
+    alert(error.message || "איחוד ההזמנות נכשל");
+  }
 }
 
 function normalizeClosedOrderStatuses() {
@@ -5171,10 +5206,13 @@ function callRowHtml(row) {
   const timeText = status === "call_again" ? row.call_again_time : (status === "no_answer" ? timeFromIso(row.updated_at) : "");
   const selected = state.selectedCallCustomers.has(String(row.customer_no));
   const whatsappBadge = row.whatsapp_sent_at ? `<span class="call-message-sent" title="נשלחה הודעת WhatsApp">נשלחה הודעה</span>` : "";
+  const appOrderBadge = normalizeCallStatus(row.status) === "ordered" && String(row.notes || "").includes("הזמנה מהאפליקציה")
+    ? `<span class="call-message-sent" title="הלקוח שלח הזמנה דרך אפליקציית הלקוחות">הזמנה מהאפליקציה</span>`
+    : "";
   return `
     <tr class="call-row status-${meta.className}">
       <td class="call-select-col"><input type="checkbox" data-call-select="${escapeAttr(row.customer_no)}" ${selected ? "checked" : ""} /></td>
-      <td><button class="call-customer-button" data-call-toggle="${escapeAttr(row.customer_no)}"><span>${escapeHtml(row.customer_name)} ${whatsappBadge}</span><small>${escapeHtml(row.customer_no)}${row.city ? ` · ${escapeHtml(row.city)}` : ""}</small></button></td>
+      <td><button class="call-customer-button" data-call-toggle="${escapeAttr(row.customer_no)}"><span>${escapeHtml(row.customer_name)} ${whatsappBadge} ${appOrderBadge}</span><small>${escapeHtml(row.customer_no)}${row.city ? ` · ${escapeHtml(row.city)}` : ""}</small></button></td>
       <td><span class="call-status-pill ${meta.className}">${meta.label}</span></td>
       <td>${escapeHtml(timeText)}</td>
     </tr>
