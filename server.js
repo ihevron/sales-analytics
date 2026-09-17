@@ -2681,6 +2681,32 @@ function productPromoNote(row) {
   return discountPercent > 0 ? `מבצע: ${discountPercent}% הנחה` : "";
 }
 
+async function loadCustomerProductSettingsOverride() {
+  if (!usePostgresPreview) return null;
+  try {
+    const rows = await postgresRows("product_customer_settings?select=sku,sale_price,promo_discount_percent,hidden,customer_recommended,updated_at&limit=10000");
+    return new Map(rows.map((row) => [String(row.sku || ""), row]));
+  } catch (error) {
+    console.warn("customer product settings override unavailable", error.message || error);
+    return null;
+  }
+}
+
+function applyCustomerProductSettingsOverride(row, settings) {
+  if (!settings) return row;
+  const saved = settings.get(String(row.sku || ""));
+  if (!saved) {
+    return { ...row, sale_price: 0, promo_discount_percent: 0 };
+  }
+  return {
+    ...row,
+    sale_price: numberValue(saved.sale_price),
+    promo_discount_percent: numberValue(saved.promo_discount_percent),
+    hidden: numberValue(saved.hidden) ? 1 : 0,
+    customer_recommended: numberValue(saved.customer_recommended) ? 1 : 0,
+  };
+}
+
 async function handleCustomerProducts(req, res) {
   const session = verifyCustomerToken(req);
   if (!session) {
@@ -2703,6 +2729,7 @@ async function handleCustomerProducts(req, res) {
   const category = String(url.searchParams.get("category") || "").trim();
   const section = String(url.searchParams.get("section") || "recommended").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 200), 1), 3000);
+  const postgresCustomerProductSettings = await loadCustomerProductSettingsOverride();
   const result = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
     const hasProductSettings = tableExists(db, "product_customer_settings");
@@ -2755,7 +2782,8 @@ async function handleCustomerProducts(req, res) {
       ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : (hasCustomerSummary ? [session.customer_no] : [])),
       ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : []),
     ]);
-    const visibleProducts = all.filter((row) => numberValue(row.hidden) !== 1);
+    const effectiveProducts = all.map((row) => applyCustomerProductSettingsOverride(row, postgresCustomerProductSettings));
+    const visibleProducts = effectiveProducts.filter((row) => numberValue(row.hidden) !== 1);
     const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const rankBySku = new Map(visibleProducts
       .slice()
@@ -2935,6 +2963,7 @@ async function handleCustomerOrder(payload, req, res) {
     return;
   }
 
+  const postgresOrderProductSettings = await loadCustomerProductSettingsOverride();
   const products = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
     const hasProductSettings = tableExists(db, "product_customer_settings");
@@ -2957,7 +2986,8 @@ async function handleCustomerOrder(payload, req, res) {
       WHERE p.sku IN (${placeholders})
     `, skus);
   });
-  const bySku = new Map(products.map((product) => [String(product.sku || ""), product]));
+  const effectiveOrderProducts = products.map((product) => applyCustomerProductSettingsOverride(product, postgresOrderProductSettings));
+  const bySku = new Map(effectiveOrderProducts.map((product) => [String(product.sku || ""), product]));
   const orderItems = normalizedItems.map((item, index) => {
     const product = bySku.get(item.sku) || { sku: item.sku, description: item.sku };
     const price = productPrice(product);
