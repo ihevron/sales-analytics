@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/optimize-order-process-20260917.py'
+      - '.github/workflows/optimize-order-process.yml'
   workflow_dispatch:
 
 permissions:
