@@ -1,9 +1,9 @@
-name: Fix hidden products in promotions
+name: Fix customer promotion source of truth
 
 on:
   push:
     paths:
-      - .github/workflows/fix-hidden-promotions.yml
+      - 'scripts/fix-promo-source-of-truth-20260917.py'
   workflow_dispatch:
 
 permissions:
@@ -16,15 +16,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Patch promotions filter
-        shell: bash
-        run: python3 -c "from pathlib import Path; p=Path('management/app.js'); s=p.read_text(); old='    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0\\n      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0\\n    ORDER BY updated_at DESC, p.description ASC'; new='    WHERE COALESCE(s.hidden, p.hidden, 0) = 0\\n      AND (\\n        COALESCE(s.sale_price, p.sale_price, 0) > 0\\n        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0\\n      )\\n    ORDER BY updated_at DESC, p.description ASC'; assert old in s, 'expected promotions query not found'; p.write_text(s.replace(old,new,1))"
-      - name: Syntax check
-        run: node --check management/app.js
+      - name: Apply promo source-of-truth patch
+        run: python3 scripts/fix-promo-source-of-truth-20260917.py
+      - name: Syntax checks
+        run: node --check server.js && node --check management/app.js
       - name: Commit fix
         run: |
+          if git diff --quiet -- server.js management/app.js; then
+            echo "No application changes to commit"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add management/app.js
-          git commit -m "Hide hidden products from promotions list"
+          git add server.js management/app.js
+          git commit -m "Use promotion settings as customer-facing source of truth"
           git push
