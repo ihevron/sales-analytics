@@ -1,0 +1,36 @@
+name: Apply sales ops patch
+
+on:
+  push:
+    paths:
+      - 'scripts/patch-sales-ops-20260917.js'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply targeted patch
+        run: node scripts/patch-sales-ops-20260917.js
+      - name: Syntax checks
+        run: node --check server.js && node --check management/app.js
+      - name: Commit patched application
+        run: |
+          if git diff --quiet -- server.js management/app.js; then
+            echo "No application changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js management/app.js
+          git commit -m "Fix customer promos, calls, picking order and order merge"
+          git push
