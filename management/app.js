@@ -5681,8 +5681,11 @@ function renderCustomerAppPromotions() {
       COALESCE(s.updated_at, p.updated_at) AS updated_at
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
-    WHERE COALESCE(s.sale_price, p.sale_price, 0) > 0
-      OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+    WHERE COALESCE(s.hidden, p.hidden, 0) = 0
+      AND (
+        COALESCE(s.sale_price, p.sale_price, 0) > 0
+        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+      )
     ORDER BY updated_at DESC, p.description ASC
     LIMIT 200
   `);
