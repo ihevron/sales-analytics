@@ -5676,15 +5676,15 @@ function renderCustomerAppPromotions() {
   ensureProductCustomerSettings();
   const rows = queryRows(`
     SELECT p.sku, p.description, p.standard_cost, p.base_price AS sale_price,
-      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, 0) AS promo_discount_percent,
       COALESCE(s.updated_at, p.updated_at) AS updated_at
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
     WHERE COALESCE(s.hidden, p.hidden, 0) = 0
       AND (
-        COALESCE(s.sale_price, p.sale_price, 0) > 0
-        OR COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) > 0
+        COALESCE(s.sale_price, 0) > 0
+        OR COALESCE(s.promo_discount_percent, 0) > 0
       )
     ORDER BY updated_at DESC, p.description ASC
     LIMIT 200
@@ -5716,8 +5716,8 @@ function renderCustomerAppRecommendedProducts() {
   ensureProductCustomerSettings();
   const rows = queryRows(`
     SELECT p.sku, p.description, p.standard_cost, p.base_price AS sale_price,
-      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent
+      COALESCE(s.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, 0) AS promo_discount_percent
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
     WHERE COALESCE(s.customer_recommended, p.customer_recommended, 0) > 0
@@ -5807,8 +5807,8 @@ function handleCustomerAppPromoProductInput() {
   const value = text(input.value);
   const row = firstRow(`
     SELECT p.sku, p.description, p.base_price, p.standard_cost,
-      COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.sale_price, 0) AS sale_price,
+      COALESCE(s.promo_discount_percent, 0) AS promo_discount_percent,
       COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
@@ -5874,8 +5874,8 @@ function editCustomerAppPromo(sku) {
   ensureProductCustomerSettings();
   const row = firstRow(`
     SELECT p.sku, p.description, p.base_price, p.standard_cost,
-      COALESCE(s.sale_price, p.sale_price, 0) AS sale_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.sale_price, 0) AS sale_price,
+      COALESCE(s.promo_discount_percent, 0) AS promo_discount_percent,
       COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended
     FROM products p
     LEFT JOIN product_customer_settings s ON s.sku = p.sku
@@ -6066,8 +6066,8 @@ function renderCustomerAppProducts() {
     SELECT p.sku, p.description, p.category, p.supplier, p.standard_cost,
       COALESCE(p.display_order, 999999) AS display_order,
       p.base_price AS sale_price,
-      COALESCE(s.sale_price, p.sale_price, 0) AS promo_price,
-      COALESCE(s.promo_discount_percent, p.promo_discount_percent, 0) AS promo_discount_percent,
+      COALESCE(s.sale_price, 0) AS promo_price,
+      COALESCE(s.promo_discount_percent, 0) AS promo_discount_percent,
       p.weight,
       COALESCE(s.hidden, p.hidden, 0) AS hidden,
       COALESCE(s.customer_recommended, p.customer_recommended, 0) AS customer_recommended

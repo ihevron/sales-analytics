@@ -1043,7 +1043,8 @@ async function handlePostgresProductSettings(payload, res) {
   }
 
   const productPatch = { updated_at: input.updated_at };
-  ["sale_price", "promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
+  if (hasInput("sale_price")) productPatch.promo_price = numberValue(input.sale_price);
+  ["promo_discount_percent", "hidden", "customer_recommended"].forEach((key) => {
     if (hasInput(key)) productPatch[key] = input[key];
   });
   const results = [];
@@ -1090,15 +1091,26 @@ async function existingPostgresProductSettings(skus) {
     if (!missingSkus.length) continue;
     const fallbackChunk = missingSkus.map((sku) => `"${sku.replaceAll('"', '\\"')}"`).join(",");
     try {
-      const rows = await postgresRows(`products?select=sku,sale_price,promo_discount_percent,customer_recommended,hidden&sku=in.(${fallbackChunk})&limit=1000`);
+      const rows = await postgresRows(`products?select=sku,customer_recommended,hidden&sku=in.(${fallbackChunk})&limit=1000`);
       rows.forEach((row) => {
-        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
+        if (!settings.has(String(row.sku))) settings.set(String(row.sku), {
+          sku: row.sku,
+          sale_price: 0,
+          promo_discount_percent: 0,
+          customer_recommended: numberValue(row.customer_recommended) ? 1 : 0,
+          hidden: numberValue(row.hidden) ? 1 : 0,
+        });
       });
     } catch (error) {
-      if (!/promo_discount_percent|customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
-      const rows = await postgresRows(`products?select=sku,sale_price&sku=in.(${fallbackChunk})&limit=1000`);
-      rows.forEach((row) => {
-        if (!settings.has(String(row.sku))) settings.set(String(row.sku), row);
+      if (!/customer_recommended|hidden|schema cache|column/i.test(error.message || "")) throw error;
+      missingSkus.forEach((sku) => {
+        if (!settings.has(String(sku))) settings.set(String(sku), {
+          sku,
+          sale_price: 0,
+          promo_discount_percent: 0,
+          customer_recommended: 0,
+          hidden: 0,
+        });
       });
     }
   }
@@ -2705,8 +2717,8 @@ async function handleCustomerProducts(req, res) {
       "p.standard_cost",
       columns.has("base_price") ? "p.base_price" : "0 AS base_price",
       columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
-      settingsSelect("sale_price", columns.has("sale_price") ? "p.sale_price" : "0"),
-      settingsSelect("promo_discount_percent", columns.has("promo_discount_percent") ? "p.promo_discount_percent" : "0"),
+      settingsSelect("sale_price", "0"),
+      settingsSelect("promo_discount_percent", "0"),
       columns.has("weight") ? "p.weight" : "0 AS weight",
       columns.has("barcode") ? "p.barcode" : "'' AS barcode",
       columns.has("image_url") ? "p.image_url" : "'' AS image_url",
@@ -2925,19 +2937,25 @@ async function handleCustomerOrder(payload, req, res) {
 
   const products = await withCurrentDatabase((db) => {
     const columns = columnsFor(db, "products");
+    const hasProductSettings = tableExists(db, "product_customer_settings");
     const select = [
-      "sku",
-      "description",
-      "standard_cost",
-      columns.has("base_price") ? "base_price" : "0 AS base_price",
-      columns.has("purchase_price") ? "purchase_price" : "0 AS purchase_price",
-      columns.has("sale_price") ? "sale_price" : "0 AS sale_price",
-      columns.has("promo_discount_percent") ? "promo_discount_percent" : "0 AS promo_discount_percent",
-      columns.has("units_per_carton") ? "units_per_carton" : "1 AS units_per_carton",
+      "p.sku",
+      "p.description",
+      "p.standard_cost",
+      columns.has("base_price") ? "p.base_price" : "0 AS base_price",
+      columns.has("purchase_price") ? "p.purchase_price" : "0 AS purchase_price",
+      hasProductSettings ? "COALESCE(pcs.sale_price, 0) AS sale_price" : "0 AS sale_price",
+      hasProductSettings ? "COALESCE(pcs.promo_discount_percent, 0) AS promo_discount_percent" : "0 AS promo_discount_percent",
+      columns.has("units_per_carton") ? "p.units_per_carton" : "1 AS units_per_carton",
     ].join(", ");
     const skus = [...new Set(normalizedItems.map((item) => item.sku))];
     const placeholders = skus.map(() => "?").join(",");
-    return sqliteRows(db, `SELECT ${select} FROM products WHERE sku IN (${placeholders})`, skus);
+    return sqliteRows(db, `
+      SELECT ${select}
+      FROM products p
+      ${hasProductSettings ? "LEFT JOIN product_customer_settings pcs ON pcs.sku = p.sku" : ""}
+      WHERE p.sku IN (${placeholders})
+    `, skus);
   });
   const bySku = new Map(products.map((product) => [String(product.sku || ""), product]));
   const orderItems = normalizedItems.map((item, index) => {
