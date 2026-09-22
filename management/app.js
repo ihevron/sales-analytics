@@ -767,13 +767,6 @@ function bindEvents() {
     state.selectedProcessOrders.clear();
     renderOrderHistory();
   });
-  document.getElementById("process-select-visible")?.addEventListener("click", selectVisibleProcessOrders);
-  document.getElementById("process-clear-selection")?.addEventListener("click", clearProcessOrderSelection);
-  document.getElementById("process-advance-selected")?.addEventListener("click", advanceSelectedProcessOrders);
-  document.getElementById("process-stage-picked")?.addEventListener("click", () => markSelectedProcessOrdersPicked());
-  document.getElementById("process-stage-shipping")?.addEventListener("click", () => markSelectedPickedOrdersInvoicesPrinted());
-  document.getElementById("process-stage-shipped")?.addEventListener("click", () => markSelectedProcessOrdersShippedBatch());
-  document.getElementById("process-export-selected")?.addEventListener("click", exportSelectedPriorityOrders);
   document.querySelectorAll("#export-selected-priority").forEach((button) => button.addEventListener("click", exportSelectedPriorityOrders));
   document.getElementById("mark-selected-picked").addEventListener("click", markSelectedProcessOrdersPicked);
   document.querySelectorAll("#mark-selected-invoices-printed").forEach((button) => button.addEventListener("click", markSelectedPickedOrdersInvoicesPrinted));
@@ -3815,7 +3808,6 @@ async function renderOrderHistory() {
     LIMIT 500
   `, [ORDER_STATUSES[0], query, query, query]), statusFilter);
   renderTable("process-pending-table", pendingRows, [
-    { key: "select", label: "", sortable: false, render: (row) => `<input type="checkbox" data-process-select="${row.id}" ${state.selectedProcessOrders.has(String(row.id)) ? "checked" : ""} />` },
     { key: "id", label: "מספר הזמנה", render: (row) => `<button class="table-link-button" data-view-process-order="${row.id}">${integer(row.id)}</button>` },
     { key: "order_date", label: "תאריך" },
     { key: "customer_name", label: "לקוח" },
@@ -3964,90 +3956,12 @@ async function updateProcessStage(input) {
   }
 }
 
-function processSelectedRows() {
-  const ids = [...state.selectedProcessOrders].map((id) => String(id));
-  if (!ids.length) return [];
-  const placeholders = ids.map(() => "?").join(",");
-  return queryRows(`
-    SELECT id, status, invoice_printed, shipped_at
-    FROM customer_orders
-    WHERE CAST(id AS TEXT) IN (${placeholders})
-      AND COALESCE(process_hidden, 0) = 0
-  `, ids);
-}
-
-function updateProcessSelectionUi() {
-  const count = state.selectedProcessOrders.size;
-  const countEl = document.getElementById("process-selected-count");
-  const labelEl = document.getElementById("process-selected-label");
-  if (countEl) countEl.textContent = integer(count);
-  if (labelEl) labelEl.textContent = count === 1 ? "הזמנה נבחרה" : "הזמנות נבחרו";
-
-  ["process-advance-selected", "process-stage-picked", "process-stage-shipping", "process-stage-shipped", "process-export-selected", "process-clear-selection"].forEach((id) => {
-    const button = document.getElementById(id);
-    if (button) button.disabled = count === 0;
-  });
-
-  document.querySelectorAll("#order-history [data-process-select]").forEach((input) => {
-    const selected = state.selectedProcessOrders.has(String(input.dataset.processSelect));
-    input.checked = selected;
-    input.closest("tr")?.classList.toggle("process-row-selected", selected);
-  });
-
-  const rows = processSelectedRows();
-  const pending = rows.filter((row) => String(row.status || "") === ORDER_STATUSES[0]).length;
-  const picked = rows.filter((row) => String(row.status || "") === "picked").length;
-  const shipping = rows.filter((row) => String(row.status || "") === ORDER_STATUSES[2]).length;
-  const advance = document.getElementById("process-advance-selected");
-  if (advance && count) {
-    const parts = [];
-    if (pending) parts.push(`${integer(pending)} ללוקט`);
-    if (picked) parts.push(`${integer(picked)} למשלוח`);
-    if (shipping) parts.push(`${integer(shipping)} לנשלח`);
-    advance.textContent = parts.length ? `העבר לשלב הבא · ${parts.join(" · ")}` : "העבר לשלב הבא";
-  } else if (advance) {
-    advance.textContent = "העבר לשלב הבא";
-  }
-}
-
 function bindProcessOrderSelection() {
-  document.querySelectorAll("#order-history [data-process-select]").forEach((input) => input.addEventListener("change", () => {
+  document.querySelectorAll("[data-process-select]").forEach((input) => input.addEventListener("change", () => {
     if (input.checked) state.selectedProcessOrders.add(String(input.dataset.processSelect));
     else state.selectedProcessOrders.delete(String(input.dataset.processSelect));
-    updateProcessSelectionUi();
   }));
-
-  document.querySelectorAll("#order-history [data-process-pane] table tbody tr").forEach((row) => {
-    const checkbox = row.querySelector("[data-process-select]");
-    if (!checkbox) return;
-    row.classList.add("process-row-selectable");
-    row.addEventListener("click", (event) => {
-      if (event.target.closest("button, input, select, a, label")) return;
-      checkbox.checked = !checkbox.checked;
-      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-  });
-  updateProcessSelectionUi();
 }
-
-function visibleProcessSelectionInputs() {
-  const pane = document.querySelector('#order-history [data-process-pane].active');
-  if (!pane) return [];
-  return [...pane.querySelectorAll('[data-process-select]')].filter((input) => !input.disabled);
-}
-
-function selectVisibleProcessOrders() {
-  const inputs = visibleProcessSelectionInputs();
-  if (!inputs.length) return alert("אין הזמנות לבחירה בתצוגה הנוכחית.");
-  inputs.forEach((input) => state.selectedProcessOrders.add(String(input.dataset.processSelect)));
-  updateProcessSelectionUi();
-}
-
-function clearProcessOrderSelection() {
-  state.selectedProcessOrders.clear();
-  updateProcessSelectionUi();
-}
-
 
 function missedOrdersCount(query) {
   return number(scalar(`
@@ -4560,125 +4474,6 @@ function exportSelectedPriorityOrders() {
   XLSX.writeFile(workbook, `priority-v2-selected-${toSqlDate(new Date())}.xlsx`);
 }
 
-async function markProcessOrdersPickedBatch(orderIds, options = {}) {
-  const ids = [...new Set((orderIds || []).map((id) => String(id)).filter(Boolean))];
-  if (!ids.length) return { ok: true, updated: 0 };
-  const placeholders = ids.map(() => "?").join(",");
-  const pendingItems = queryRows(`
-    SELECT id, order_id, quantity, picked_quantity, substitute_product_id
-    FROM customer_order_items
-    WHERE CAST(order_id AS TEXT) IN (${placeholders})
-      AND COALESCE(item_status, 'pending') = 'pending'
-    ORDER BY order_id, id
-  `, ids);
-  const now = new Date().toISOString();
-  const sequenceStart = nextActionSequence();
-  state.db.run("BEGIN TRANSACTION");
-  pendingItems.forEach((item, index) => {
-    const itemStatus = item.substitute_product_id ? "substituted" : "picked";
-    const pickedQuantity = number(item.picked_quantity) > 0 ? number(item.picked_quantity) : number(item.quantity);
-    state.db.run(
-      "UPDATE customer_order_items SET item_status = ?, picked_quantity = ?, action_sequence = ? WHERE id = ?",
-      [itemStatus, pickedQuantity, sequenceStart + index, item.id]
-    );
-  });
-  ids.forEach((orderId) => {
-    state.db.run(
-      "UPDATE customer_orders SET status = 'picked', picked_by = ?, picked_at = ?, updated_at = ? WHERE id = ?",
-      ["ליקוט מרוכז", now, now, orderId]
-    );
-  });
-  state.db.run("COMMIT");
-
-  pendingItems.forEach((item, index) => {
-    const itemStatus = item.substitute_product_id ? "substituted" : "picked";
-    const pickedQuantity = number(item.picked_quantity) > 0 ? number(item.picked_quantity) : number(item.quantity);
-    queuePickingChange({ type: "itemStatus", itemId: item.id, itemStatus, pickedQuantity, actionSequence: sequenceStart + index });
-  });
-  ids.forEach((orderId) => queuePickingChange({ type: "completeOrder", orderId, pickedBy: "ליקוט מרוכז", pickedAt: now, updatedAt: now }));
-
-  await savePickingNow({ silent: true });
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  if (options.clearSelection !== false) ids.forEach((id) => state.selectedProcessOrders.delete(String(id)));
-  if (options.render !== false) {
-    renderPicking();
-    renderOrderHistory();
-  }
-  return { ok: true, updated: ids.length };
-}
-
-async function markProcessOrdersReadyForShippingBatch(orderIds, options = {}) {
-  const ids = [...new Set((orderIds || []).map((id) => String(id)).filter(Boolean))];
-  if (!ids.length) return { ok: true, updated: 0 };
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = queryRows(`SELECT id, status FROM customer_orders WHERE CAST(id AS TEXT) IN (${placeholders})`, ids);
-  const pendingIds = rows.filter((row) => String(row.status || "") === ORDER_STATUSES[0]).map((row) => String(row.id));
-  if (pendingIds.length) {
-    await markProcessOrdersPickedBatch(pendingIds, { clearSelection: false, render: false });
-  }
-
-  const now = new Date().toISOString();
-  state.db.run("BEGIN TRANSACTION");
-  ids.forEach((orderId) => {
-    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, updated_at = ? WHERE id = ?", [ORDER_STATUSES[2], now, orderId]);
-  });
-  state.db.run("COMMIT");
-  await writeBrowserDatabase(state.db.export());
-  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: ORDER_STATUSES[2], updated_at: now });
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  if (options.clearSelection !== false) ids.forEach((id) => state.selectedProcessOrders.delete(String(id)));
-  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  if (options.render !== false) renderOrderHistory();
-  return result;
-}
-
-async function markProcessOrdersShippedBatchByIds(orderIds, options = {}) {
-  const ids = [...new Set((orderIds || []).map((id) => String(id)).filter(Boolean))];
-  if (!ids.length) return { ok: true, updated: 0 };
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = queryRows(`SELECT id, status FROM customer_orders WHERE CAST(id AS TEXT) IN (${placeholders})`, ids);
-  const notReady = rows.filter((row) => String(row.status || "") !== ORDER_STATUSES[2] && String(row.status || "") !== "נשלחה").map((row) => String(row.id));
-  if (notReady.length) {
-    await markProcessOrdersReadyForShippingBatch(notReady, { clearSelection: false, render: false });
-  }
-  const now = new Date().toISOString();
-  state.db.run("BEGIN TRANSACTION");
-  ids.forEach((orderId) => {
-    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = 'נשלחה', shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", [now, now, orderId]);
-  });
-  state.db.run("COMMIT");
-  await writeBrowserDatabase(state.db.export());
-  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  if (options.clearSelection !== false) ids.forEach((id) => state.selectedProcessOrders.delete(String(id)));
-  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  if (options.render !== false) renderOrderHistory();
-  return result;
-}
-
-async function advanceSelectedProcessOrders() {
-  const ids = selectedActiveProcessOrderIds();
-  if (!ids.length) return alert("יש לבחור לפחות הזמנה פעילה אחת.");
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = queryRows(`SELECT id, status FROM customer_orders WHERE CAST(id AS TEXT) IN (${placeholders})`, ids);
-  const pendingIds = rows.filter((row) => String(row.status || "") === ORDER_STATUSES[0]).map((row) => String(row.id));
-  const pickedIds = rows.filter((row) => String(row.status || "") === "picked").map((row) => String(row.id));
-  const shippingIds = rows.filter((row) => String(row.status || "") === ORDER_STATUSES[2]).map((row) => String(row.id));
-  const summary = [
-    pendingIds.length ? `${integer(pendingIds.length)} ללוקט` : "",
-    pickedIds.length ? `${integer(pickedIds.length)} למוכן למשלוח` : "",
-    shippingIds.length ? `${integer(shippingIds.length)} לנשלח` : "",
-  ].filter(Boolean).join(" · ");
-  if (!confirm(`להעביר את הנבחרות שלב אחד קדימה?${summary ? `\n${summary}` : ""}`)) return;
-
-  if (pendingIds.length) await markProcessOrdersPickedBatch(pendingIds, { clearSelection: false, render: false });
-  if (pickedIds.length) await markProcessOrdersReadyForShippingBatch(pickedIds, { clearSelection: false, render: false });
-  if (shippingIds.length) await markProcessOrdersShippedBatchByIds(shippingIds, { clearSelection: false, render: false });
-  ids.forEach((id) => state.selectedProcessOrders.delete(String(id)));
-  renderPicking();
-  renderOrderHistory();
-}
-
 function selectAllPickedProcessOrders() {
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   const rows = filterProcessRows(queryRows(`
@@ -4707,21 +4502,32 @@ function selectedPickedOrderIds() {
   `, [...ids, ORDER_STATUSES[0], ORDER_STATUSES[2]]).map((row) => String(row.id));
 }
 
-async function markSelectedProcessOrdersPicked(options = {}) {
+async function markSelectedProcessOrdersPicked() {
   const ids = selectedPickedOrderIds();
   if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת.");
   const rows = queryRows(`SELECT id, status FROM customer_orders WHERE CAST(id AS TEXT) IN (${ids.map(() => "?").join(",")})`, ids);
   const pendingIds = rows.filter((row) => String(row.status) === ORDER_STATUSES[0]).map((row) => String(row.id));
   if (!pendingIds.length) return alert("אין הזמנות ממתינות לליקוט בין הנבחרות.");
-  if (!options.skipConfirm && !confirm(`לסמן ${integer(pendingIds.length)} הזמנות כשלוקטו?`)) return;
-  return markProcessOrdersPickedBatch(pendingIds);
+  if (!confirm(`לסמן ${integer(pendingIds.length)} הזמנות כשלוקטו?`)) return;
+  for (const orderId of pendingIds) {
+    await manualCompletePickingOrder(orderId);
+  }
+  pendingIds.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  renderOrderHistory();
 }
 
-async function markSelectedPickedOrdersInvoicesPrinted(options = {}) {
+async function markSelectedPickedOrdersInvoicesPrinted() {
   const ids = selectedPickedOrderIds();
-  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת.");
-  if (!options.skipConfirm && !confirm(`להעביר ${integer(ids.length)} הזמנות למוכן למשלוח?`)) return;
-  return markProcessOrdersReadyForShippingBatch(ids);
+  if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת בלשונית הזמנות שלוקטו.");
+  if (!confirm(`לסמן ${integer(ids.length)} חשבוניות כהודפסו ולהעביר למוכן למשלוח?`)) return;
+  const results = [];
+  for (const orderId of ids) {
+    results.push(await ensureOrderReadyForShipping(orderId));
+  }
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length) alert(`${integer(failed.length)} הזמנות לא נשמרו לשרת.`);
+  renderOrderHistory();
 }
 
 function selectAllShippingProcessOrders() {
@@ -4823,11 +4629,22 @@ async function markSelectedProcessOrdersShipped() {
   renderOrderHistory();
 }
 
-async function markSelectedProcessOrdersShippedBatch(options = {}) {
+async function markSelectedProcessOrdersShippedBatch() {
   const ids = selectedActiveProcessOrderIds();
   if (!ids.length) return alert("יש לבחור לפחות הזמנה אחת.");
-  if (!options.skipConfirm && !confirm(`לסמן ${integer(ids.length)} הזמנות כנשלחו?`)) return;
-  return markProcessOrdersShippedBatchByIds(ids);
+  if (!confirm(`לסמן ${integer(ids.length)} הזמנות כנשלחו?`)) return;
+  const now = new Date().toISOString();
+  state.db.run("BEGIN TRANSACTION");
+  ids.forEach((orderId) => {
+    state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", ["נשלחה", now, now, orderId]);
+  });
+  state.db.run("COMMIT");
+  ids.forEach((orderId) => state.selectedProcessOrders.delete(String(orderId)));
+  await writeBrowserDatabase(state.db.export());
+  const result = await writeOrdersBatchPatch(ids, { invoice_printed: true, status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
+  renderOrderHistory();
 }
 
 async function hideSelectedShippingOrders() {
