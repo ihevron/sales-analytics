@@ -87,6 +87,8 @@ const state = {
   serverSaveInProgress: false,
   databaseVersion: "",
   autoRefreshTimer: null,
+  liveOrderSyncTimer: null,
+  liveOrderSyncInProgress: false,
   lastUserActivityAt: Date.now(),
   pendingPickingChanges: [],
   callTemplates: loadCallTemplates(),
@@ -227,6 +229,7 @@ async function init() {
   startWeeklyCallResetTimer();
   bindAutoRefreshActivityTracking();
   startAutoRefreshTimer();
+  startLiveOrderSyncTimer();
   setStatus("מוכן לעבודה");
 }
 
@@ -3071,9 +3074,9 @@ function comparePriorityExportItems(a, b) {
   return number(a.export_sequence ?? a.entry_sequence ?? 0) - number(b.export_sequence ?? b.entry_sequence ?? 0);
 }
 
-async function renderPicking() {
+async function renderPicking(options = {}) {
   normalizeClosedOrderStatuses();
-  if (!state.pendingPickingChanges.length && !state.serverSaveInProgress && Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
+  if (!options.skipRemoteSync && !state.pendingPickingChanges.length && !state.serverSaveInProgress && Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
   document.querySelectorAll("[data-picking-mode]").forEach((button) => button.classList.toggle("active", button.dataset.pickingMode === state.pickingMode));
   document.getElementById("product-picking-controls").classList.toggle("hidden", state.pickingMode !== "product");
   if (state.pickingMode === "product") {
@@ -3750,6 +3753,7 @@ async function syncOrderHistoryFromPostgres() {
       ]);
     });
     state.db.run("COMMIT");
+    await writeBrowserDatabase(state.db.export());
     return true;
   } catch (error) {
     try {
@@ -3760,9 +3764,9 @@ async function syncOrderHistoryFromPostgres() {
   }
 }
 
-async function renderOrderHistory() {
+async function renderOrderHistory(options = {}) {
   normalizeClosedOrderStatuses();
-  if (Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
+  if (!options.skipRemoteSync && Date.now() > state.forceSqliteOrderHistoryUntil) await syncOrderHistoryFromPostgres();
   const query = `%${document.getElementById("history-query").value.trim()}%`;
   const statusFilter = document.getElementById("history-status-filter")?.value || state.processStatusFilter || "all";
   state.processStatusFilter = statusFilter;
@@ -6733,6 +6737,38 @@ function bindAutoRefreshActivityTracking() {
 function startAutoRefreshTimer() {
   if (state.autoRefreshTimer) clearInterval(state.autoRefreshTimer);
   state.autoRefreshTimer = setInterval(runSafeAutoRefresh, 10 * 60 * 1000);
+}
+
+function currentOperationalScreen() {
+  return document.querySelector(".screen.active-screen")?.id || "";
+}
+
+function startLiveOrderSyncTimer() {
+  if (state.liveOrderSyncTimer) clearInterval(state.liveOrderSyncTimer);
+  state.liveOrderSyncTimer = setInterval(runLiveOrderSync, 10 * 1000);
+  window.addEventListener("focus", () => runLiveOrderSync());
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) runLiveOrderSync();
+  });
+}
+
+async function runLiveOrderSync() {
+  const screen = currentOperationalScreen();
+  if (!["picking", "order-history"].includes(screen)) return;
+  if (document.hidden || state.liveOrderSyncInProgress) return;
+  if (state.serverSaveInProgress || state.pendingPickingChanges.length || state.persistTimer || hasOpenModal() || isEditingNow()) return;
+
+  state.liveOrderSyncInProgress = true;
+  try {
+    const synced = await syncOrderHistoryFromPostgres();
+    if (!synced) return;
+    if (screen === "picking") await renderPicking({ skipRemoteSync: true });
+    if (screen === "order-history") await renderOrderHistory({ skipRemoteSync: true });
+  } catch (error) {
+    console.warn("Live order sync failed", error);
+  } finally {
+    state.liveOrderSyncInProgress = false;
+  }
 }
 
 function hasOpenModal() {
