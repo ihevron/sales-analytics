@@ -3694,16 +3694,35 @@ async function manualCompletePickingOrder(orderId) {
 
 async function syncOrderHistoryFromPostgres() {
   if (Date.now() <= state.forceSqliteOrderHistoryUntil) return false;
+  if (state.serverSaveInProgress || state.pendingPickingChanges.length) return false;
   try {
-    const rawQuery = document.getElementById("history-query")?.value?.trim() || "";
-    const params = new URLSearchParams({ q: rawQuery });
-    const response = await fetch(`/api/postgres/order-history?${params.toString()}`, { cache: "no-store" });
+    const response = await fetch("/api/postgres/order-history", { cache: "no-store" });
     if (!response.ok) return false;
     const data = await response.json();
     if (!data.ok) return false;
     const orders = data.orders || [];
     const items = data.items || [];
+    const activeOrderIds = new Set((data.activeOrderIds || orders
+      .filter((order) => ["מוכן לאיסוף", "picked", "מוכן למשלוח"].includes(String(order.status || "")) && !dbFlag(order.process_hidden))
+      .map((order) => number(order.id)))
+      .map((id) => String(id)));
+
+    const localActiveRows = queryRows(`
+      SELECT id
+      FROM customer_orders
+      WHERE status IN ('מוכן לאיסוף', 'picked', 'מוכן למשלוח')
+        AND COALESCE(shipped_at, '') = ''
+        AND COALESCE(process_hidden, 0) = 0
+    `);
+    const staleLocalIds = localActiveRows
+      .map((row) => String(row.id))
+      .filter((id) => !activeOrderIds.has(id));
+
     state.db.run("BEGIN TRANSACTION");
+    staleLocalIds.forEach((orderId) => {
+      state.db.run("DELETE FROM customer_order_items WHERE order_id = ?", [number(orderId)]);
+      state.db.run("DELETE FROM customer_orders WHERE id = ?", [number(orderId)]);
+    });
     orders.forEach((order) => {
       state.db.run("DELETE FROM customer_orders WHERE id = ?", [number(order.id)]);
       state.db.run(`
