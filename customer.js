@@ -20,7 +20,7 @@ const SECTION_TEXT = {
   },
   returns: {
     title: "החזרות",
-    subtitle: "מוצרים שנרכשו בשנה האחרונה. כל כמות כאן תירשם כהחזרה.",
+    subtitle: "מוצרים שרכשת ב-12 החודשים האחרונים. הרכישות האחרונות מופיעות ראשונות.",
   },
 };
 
@@ -108,8 +108,16 @@ async function init() {
   document.getElementById("terms-confirm").addEventListener("click", acceptTerms);
   document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.section = button.dataset.section;
+      const nextSection = button.dataset.section;
+      if (nextSection === "returns") {
+        state.search = "";
+        state.category = "";
+        const searchInput = document.getElementById("product-search");
+        if (searchInput) searchInput.value = "";
+      }
+      state.section = nextSection;
       loadProducts();
+      if (nextSection === "returns") window.scrollTo({ top: 0, behavior: "smooth" });
     });
   });
   fillQuantityOptions();
@@ -175,6 +183,12 @@ function money(value) {
 
 function integer(value) {
   return new Intl.NumberFormat("he-IL", { maximumFractionDigits: 0 }).format(Number(value) || 0);
+}
+
+function shortDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "";
+  return new Intl.DateTimeFormat("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(timestamp));
 }
 
 function debounce(callback, delay) {
@@ -349,7 +363,10 @@ async function loadProducts() {
   const grid = document.getElementById("product-grid");
   grid.innerHTML = `<div class="empty-state">טוען מוצרים...</div>`;
   try {
-    const params = new URLSearchParams({ limit: state.section === "all" ? "3000" : "300", section: state.section });
+    const params = new URLSearchParams({
+      limit: state.section === "all" ? "3000" : (state.section === "returns" ? "1000" : "300"),
+      section: state.section,
+    });
     if (state.search) params.set("q", state.search);
     if (state.category) params.set("category", state.category);
     const data = await api(`/api/customer/products?${params.toString()}`);
@@ -393,6 +410,13 @@ function updateNavigation() {
   const subtitleElement = document.getElementById("section-subtitle");
   subtitleElement.textContent = subtitle;
   subtitleElement.hidden = !subtitle;
+  const searchInput = document.getElementById("product-search");
+  if (searchInput) {
+    searchInput.placeholder = state.section === "returns"
+      ? "חיפוש במוצרים שרכשת: שם, מק״ט או ברקוד"
+      : "שם מוצר, מק״ט או ברקוד";
+  }
+  document.getElementById("app-view")?.classList.toggle("returns-mode", state.section === "returns");
 }
 
 function updateTopButton() {
@@ -421,6 +445,7 @@ function renderProducts() {
         <div class="product-info">
           <h3>${escapeHtml(product.description || product.sku)}</h3>
           <div class="product-meta">מק״ט ${escapeHtml(product.sku)}${product.category ? ` · ${escapeHtml(product.category)}` : ""}</div>
+          ${isReturnSection && product.last_purchase_date ? `<div class="return-purchase-meta">נרכש לאחרונה: ${escapeHtml(shortDate(product.last_purchase_date))}</div>` : ""}
           ${badge ? `<div class="product-badge ${badgeClass}">${escapeHtml(badge)}</div>` : ""}
           ${renderPrice(product)}
           <div class="quantity-row" data-sku="${escapeHtml(product.sku)}" data-cart-key="${escapeHtml(cartKey)}" data-return="${isReturnSection ? "1" : "0"}">

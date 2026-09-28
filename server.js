@@ -2768,17 +2768,19 @@ async function handleCustomerProducts(req, res) {
       settingsSelect("customer_recommended", columns.has("customer_recommended") ? "p.customer_recommended" : "0"),
       "COALESCE(cu.customer_quantity, 0) AS customer_quantity",
       "COALESCE(ru.recent_customer_quantity, 0) AS recent_customer_quantity",
+      "COALESCE(ru.last_purchase_date, '') AS last_purchase_date",
       "COALESCE(gu.global_quantity, 0) AS global_quantity",
     ].join(", ");
     const hasCustomerSummary = tableExists(db, "customer_product_summary");
     const hasSalesRaw = tableExists(db, "sales_raw");
     const customerUsageStartDate = monthsAgoDateIso(3);
+    const returnUsageStartDate = monthsAgoDateIso(12);
     const customerUsage = hasSalesRaw
       ? "SELECT sku, SUM(quantity) AS customer_quantity FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
       : (hasCustomerSummary ? "SELECT sku, SUM(quantity) AS customer_quantity FROM customer_product_summary WHERE customer_no = ? GROUP BY sku" : "SELECT '' AS sku, 0 AS customer_quantity WHERE 0");
     const recentUsage = hasSalesRaw
-      ? "SELECT sku, SUM(quantity) AS recent_customer_quantity FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
-      : "SELECT '' AS sku, 0 AS recent_customer_quantity WHERE 0";
+      ? "SELECT sku, SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END) AS recent_customer_quantity, MAX(CASE WHEN quantity > 0 THEN sale_date ELSE NULL END) AS last_purchase_date FROM sales_raw WHERE customer_no = ? AND sale_date >= ? GROUP BY sku"
+      : "SELECT '' AS sku, 0 AS recent_customer_quantity, '' AS last_purchase_date WHERE 0";
     const globalUsage = hasCustomerSummary
       ? "SELECT sku, SUM(quantity) AS global_quantity FROM customer_product_summary GROUP BY sku"
       : (hasSalesRaw ? "SELECT sku, SUM(quantity) AS global_quantity FROM sales_raw GROUP BY sku" : "SELECT '' AS sku, 0 AS global_quantity WHERE 0");
@@ -2793,11 +2795,15 @@ async function handleCustomerProducts(req, res) {
       LIMIT 3000
     `, [
       ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : (hasCustomerSummary ? [session.customer_no] : [])),
-      ...(hasSalesRaw ? [session.customer_no, customerUsageStartDate] : []),
+      ...(hasSalesRaw ? [session.customer_no, returnUsageStartDate] : []),
     ]);
     const effectiveProducts = all.map((row) => applyCustomerProductSettingsOverride(row, postgresCustomerProductSettings));
     const visibleProducts = effectiveProducts.filter((row) => numberValue(row.hidden) !== 1);
     const categories = [...new Set(visibleProducts.map((row) => String(row.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
+    const returnCategories = [...new Set(visibleProducts
+      .filter((row) => numberValue(row.recent_customer_quantity) > 0)
+      .map((row) => String(row.category || "").trim())
+      .filter(Boolean))].sort((a, b) => a.localeCompare(b, "he"));
     const rankBySku = new Map(visibleProducts
       .slice()
       .sort((a, b) => numberValue(b.global_quantity) - numberValue(a.global_quantity) || String(a.description || "").localeCompare(String(b.description || ""), "he"))
@@ -2843,7 +2849,14 @@ async function handleCustomerProducts(req, res) {
     } else if (section === "deals") {
       sourceRows = sortProducts(baseRows.filter((row) => productPromoPrice(row) > 0));
     } else if (section === "returns") {
-      sourceRows = sortProducts(baseRows.filter((row) => numberValue(row.recent_customer_quantity) > 0));
+      sourceRows = baseRows
+        .filter((row) => numberValue(row.recent_customer_quantity) > 0)
+        .slice()
+        .sort((a, b) =>
+          String(b.last_purchase_date || "").localeCompare(String(a.last_purchase_date || ""))
+          || numberValue(b.recent_customer_quantity) - numberValue(a.recent_customer_quantity)
+          || String(a.description || "").localeCompare(String(b.description || ""), "he")
+        );
     } else {
       sourceRows = sortProducts(baseRows);
     }
@@ -2868,6 +2881,8 @@ async function handleCustomerProducts(req, res) {
           pick_order: numberValue(row.pick_order) || 999999,
           image_url: String(row.image_url || ""),
           customer_recommended: numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0,
+          recent_customer_quantity: numberValue(row.recent_customer_quantity),
+          last_purchase_date: String(row.last_purchase_date || ""),
           popularity_label: numberValue(row.global_quantity) <= 0
             ? ""
             : (rankBySku.get(String(row.sku || "")) <= 10 ? "Top 10" : (rankBySku.get(String(row.sku || "")) <= 100 ? "Top 100" : "")),
@@ -2875,7 +2890,7 @@ async function handleCustomerProducts(req, res) {
       });
     return {
       rows: filtered,
-      categories,
+      categories: section === "returns" ? returnCategories : categories,
       hasCustomerHistory: visibleProducts.some((row) => numberValue(row.customer_quantity) > 0 || numberValue(row.customer_recommended) > 0),
     };
   });
