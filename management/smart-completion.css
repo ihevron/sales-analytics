@@ -1,0 +1,28 @@
+
+.smart-completion-modal {
+  width: min(920px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+  overflow: auto;
+}
+.smart-completion-modal .panel-header p { margin: 4px 0 0; color: var(--muted); }
+.smart-completion-help { margin: 0 0 12px; color: var(--muted); }
+.smart-completion-list { display: grid; gap: 8px; margin-bottom: 14px; }
+.smart-completion-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff;
+}
+.smart-completion-row.selected { border-color: #60a5fa; background: #eff6ff; }
+.smart-completion-row.excluded { opacity: .5; background: #f8fafc; }
+.smart-completion-check { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.smart-completion-check input { width: 19px; height: 19px; }
+.smart-rank { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #e2e8f0; font-weight: 900; }
+.smart-product-main { display: grid; gap: 3px; min-width: 0; }
+.smart-product-main strong { font-size: 15px; }
+.smart-product-main small { color: var(--muted); line-height: 1.4; }
+.smart-completion-score { min-width: 48px; text-align: center; font-weight: 900; color: #1d4ed8; }
+.smart-message-label { display: grid; gap: 6px; font-weight: 800; }
+#smart-completion-message { width: 100%; resize: vertical; min-height: 150px; }
+@media (max-width: 720px) {
+  .smart-completion-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .smart-completion-row > button { grid-column: 1 / -1; }
+}

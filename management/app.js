@@ -2848,11 +2848,13 @@ async function saveOrder() {
       saveButton.textContent = originalSaveText;
     }
   }
+  const smartCompletionContext = { customer: { ...state.orderCustomer }, items: state.orderItems.map((item) => ({ ...item })), orderId: serverResult.orderId || serverResult.order?.id || "" };
   alert(`הזמנה ${serverResult.orderId || ""} נשמרה`);
   resetOrder({ clearCustomer: true });
   renderPicking();
   renderOrderHistory();
   await renderCalls();
+  if (window.openSmartCompletionAfterOrder) window.openSmartCompletionAfterOrder(smartCompletionContext);
 }
 
 function resetOrder(options = {}) {
