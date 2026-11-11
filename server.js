@@ -863,6 +863,114 @@ async function handlePostgresProductFilters(res) {
   });
 }
 
+
+async function mirrorImportedProductsToSqlite(products, postgresRowsForImport = []) {
+  const bySku = new Map(postgresRowsForImport.map((row) => [String(row.sku || ""), row]));
+  const unique = [...new Map((Array.isArray(products) ? products : [])
+    .map((product) => [String(product?.sku || "").trim(), product])
+    .filter(([sku]) => sku)).values()];
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    ensureServerColumn(db, "products", "barcode", "TEXT");
+    ensureServerColumn(db, "products", "image_url", "TEXT");
+    ensureServerColumn(db, "products", "sale_price", "REAL DEFAULT 0");
+    ensureServerColumn(db, "products", "promo_discount_percent", "REAL DEFAULT 0");
+    ensureServerColumn(db, "products", "display_order", "REAL DEFAULT 999999");
+    ensureServerColumn(db, "products", "pick_order", "REAL DEFAULT 999999");
+    ensureServerColumn(db, "products", "units_per_carton", "REAL DEFAULT 1");
+    ensureServerColumn(db, "products", "hidden", "INTEGER NOT NULL DEFAULT 0");
+    ensureServerColumn(db, "products", "customer_recommended", "INTEGER NOT NULL DEFAULT 0");
+    const existingImages = new Map(sqliteRows(db, "SELECT sku, image_url FROM products WHERE COALESCE(TRIM(image_url), '') <> ''").map((row) => [String(row.sku || ""), String(row.image_url || "")]));
+    db.run("BEGIN TRANSACTION");
+    db.run("DELETE FROM products");
+    for (const product of unique) {
+      const sku = String(product.sku || "").trim();
+      const pg = bySku.get(sku) || {};
+      db.run(
+        "INSERT INTO products (sku, barcode, image_url, description, category, standard_cost, base_price, sale_price, promo_discount_percent, weight, supplier, display_order, pick_order, units_per_carton, hidden, customer_recommended, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          sku,
+          String(product.barcode || pg.barcode || ""),
+          String(product.image_url || pg.image_url || existingImages.get(sku) || ""),
+          String(product.description || pg.description || ""),
+          String(product.category || pg.category || ""),
+          numberValue(product.standard_cost),
+          numberValue(product.base_price),
+          numberValue(product.sale_price),
+          numberValue(product.promo_discount_percent),
+          numberValue(product.weight),
+          String(product.supplier || pg.supplier || ""),
+          numberValue(product.display_order) || 999999,
+          numberValue(product.pick_order) || 999999,
+          numberValue(product.units_per_carton) || 1,
+          numberValue(product.hidden) ? 1 : 0,
+          numberValue(product.customer_recommended) ? 1 : 0,
+          String(product.updated_at || new Date().toISOString()),
+        ],
+      );
+    }
+    db.run("COMMIT");
+    await writeCurrentDatabaseBuffer(Buffer.from(db.export()));
+    return { ok: true, imported: unique.length };
+  } catch (error) {
+    try { db.run("ROLLBACK"); } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+async function mirrorCallProfilesToSqlite(rows, replaceCalls = false) {
+  const SQL = await initServerSql();
+  const data = await readCurrentDatabaseBuffer();
+  const db = new SQL.Database(new Uint8Array(data));
+  try {
+    ensureServerCustomerPortalSchema(db);
+    ensureServerColumn(db, "customer_call_profiles", "contact", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "phone2", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "city", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "company_id", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "terms_accepted_at", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "terms_version_accepted", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "customer_type", "TEXT DEFAULT 'existing'");
+    ensureServerColumn(db, "customer_call_profiles", "days", "TEXT");
+    ensureServerColumn(db, "customer_call_profiles", "source", "TEXT DEFAULT 'calls'");
+    db.run("BEGIN TRANSACTION");
+    if (replaceCalls) db.run("DELETE FROM customer_call_profiles WHERE COALESCE(source, 'calls') = 'calls'");
+    for (const row of rows) {
+      db.run(
+        "INSERT INTO customer_call_profiles (customer_no, customer_name, contact, phone, phone2, city, address, company_id, terms_accepted_at, terms_version_accepted, customer_type, days, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(customer_no) DO UPDATE SET customer_name=excluded.customer_name, contact=excluded.contact, phone=excluded.phone, phone2=excluded.phone2, city=excluded.city, address=excluded.address, company_id=excluded.company_id, terms_accepted_at=COALESCE(NULLIF(excluded.terms_accepted_at,''),customer_call_profiles.terms_accepted_at), terms_version_accepted=COALESCE(NULLIF(excluded.terms_version_accepted,''),customer_call_profiles.terms_version_accepted), customer_type=excluded.customer_type, days=excluded.days, source=excluded.source, updated_at=excluded.updated_at",
+        [
+          String(row.customer_no || ""),
+          String(row.customer_name || ""),
+          String(row.contact || ""),
+          String(row.phone || ""),
+          String(row.phone2 || ""),
+          String(row.city || ""),
+          String(row.address || ""),
+          String(row.company_id || ""),
+          row.terms_accepted_at || "",
+          row.terms_version_accepted || "",
+          String(row.customer_type || "existing"),
+          String(row.call_days || row.days || ""),
+          String(row.source || "calls"),
+          String(row.updated_at || new Date().toISOString()),
+        ],
+      );
+    }
+    db.run("COMMIT");
+    await writeCurrentDatabaseBuffer(Buffer.from(db.export()));
+    return { ok: true, imported: rows.length };
+  } catch (error) {
+    try { db.run("ROLLBACK"); } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 async function handlePostgresProductsImport(payload, res) {
   if (!requirePostgres(res)) return;
   await assertProductsImportSchema();
@@ -913,8 +1021,9 @@ async function handlePostgresProductsImport(payload, res) {
       headers: { Prefer: "return=minimal" },
     });
     await upsertProductRowsWithColumnFallback(rows);
+    await mirrorImportedProductsToSqlite(products, rows);
   }
-  sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+  sendJson(res, 200, { ok: true, source: "postgres+sqlite", imported: rows.length });
 }
 
 async function upsertProductRowsWithColumnFallback(rows) {
@@ -1222,27 +1331,37 @@ async function handlePostgresCallsReset(payload, res) {
   sendJson(res, 200, { ok: true, source: "postgres", reset_dates: dates });
 }
 
+
 async function handlePostgresCallProfile(payload, res) {
   if (!requirePostgres(res)) return;
-  const customerNo = String(payload.customer_no || "");
+  const customerNo = String(payload.customer_no || "").trim();
+  const customerName = String(payload.customer_name || "").trim() || customerNo;
   if (!customerNo) {
     sendJson(res, 400, { ok: false, error: "customer_no is required" });
     return;
   }
+  const now = new Date().toISOString();
   const row = {
-    phone: payload.phone || "",
-    address: payload.address || "",
-    call_days: payload.call_days || "",
-    source: "calls",
-    updated_at: new Date().toISOString(),
+    customer_no: customerNo,
+    customer_name: customerName,
+    contact: String(payload.contact || ""),
+    phone: String(payload.phone || ""),
+    phone2: String(payload.phone2 || ""),
+    city: String(payload.city || ""),
+    address: String(payload.address || ""),
+    company_id: String(payload.company_id || ""),
+    terms_accepted_at: payload.terms_accepted_at || null,
+    terms_version_accepted: payload.terms_version_accepted || null,
+    customer_type: String(payload.customer_type || "existing"),
+    call_days: String(payload.call_days || payload.days || ""),
+    source: String(payload.source || "customer_portal"),
+    updated_at: now,
   };
-  await postgresPatchWithColumnFallback(
-    "customer_call_profiles",
-    `customer_no=eq.${encodeURIComponent(customerNo)}`,
-    row,
-    ["phone", "address", "call_days", "source", "updated_at"],
-  );
-  sendJson(res, 200, { ok: true, source: "postgres" });
+  await postgresUpsertWithColumnFallback("customer_call_profiles", [row], "customer_no", [
+    "contact","phone","phone2","city","address","company_id","terms_accepted_at","terms_version_accepted","customer_type","call_days","source","updated_at"
+  ]);
+  await mirrorCallProfilesToSqlite([row], false);
+  sendJson(res, 200, { ok: true, source: "postgres+sqlite", customer: row });
 }
 
 async function handlePostgresCallProfilesImport(payload, res) {
@@ -1261,7 +1380,10 @@ async function handlePostgresCallProfilesImport(payload, res) {
       return {
         customer_no: customerNo,
         customer_name: customerName,
+        contact: String(profile.contact || "").trim(),
         phone,
+        phone2: String(profile.phone2 || "").trim(),
+        city: String(profile.city || "").trim(),
         address: [...new Set(addressParts)].join(", "),
         company_id: String(profile.company_id || "").trim(),
         terms_accepted_at: profile.terms_accepted_at || null,
@@ -1321,8 +1443,9 @@ async function handlePostgresCallProfilesImport(payload, res) {
       "source",
       "updated_at",
     ]);
+    await mirrorCallProfilesToSqlite(rows, true);
   }
-  sendJson(res, 200, { ok: true, source: "postgres", imported: rows.length });
+  sendJson(res, 200, { ok: true, source: "postgres+sqlite", imported: rows.length });
 }
 
 async function handlePostgresOrderHistory(req, res) {

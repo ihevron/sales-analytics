@@ -1069,11 +1069,10 @@ async function importCustomerAppProductsFile(event) {
     const importedProducts = importProductRows(rows);
     await importProductsToPostgres(importedProducts);
     state.invoiceProductIndex = null;
-    const persisted = await persistDatabase();
+    const reloaded = await reloadDatabaseFromServer();
+    if (!reloaded) throw new Error("המוצרים נשמרו בשרת אך רענון הנתונים נכשל");
     await refreshAll();
-    status.textContent = persisted.server.ok
-      ? `נטענו ${integer(importedProducts.length)} מוצרים`
-      : `נטענו ${integer(importedProducts.length)} מוצרים ונשמר בדפדפן בלבד`;
+    status.textContent = `נטענו ${integer(importedProducts.length)} מוצרים ונשמרו בשרת`;
     showCustomerAppTab("products");
   } catch (error) {
     console.error(error);
@@ -1166,8 +1165,9 @@ async function importCallCustomersFile(event) {
     const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false, forceFixedColumns: true });
     const imported = importedProfiles.length;
     const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
-    if (!mirror.ok) state.forceSqliteCallsUntil = Date.now() + 10 * 60 * 1000;
-    await persistDatabase();
+    if (!mirror.ok) throw new Error(mirror.error || "שמירת הלקוחות בשרת נכשלה");
+    const reloaded = await reloadDatabaseFromServer();
+    if (!reloaded) throw new Error("הלקוחות נשמרו בשרת אך רענון הנתונים נכשל");
     await renderCalls();
     document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות (${callProfileDaySummary(importedProfiles)})`;
   } catch (error) {
@@ -1188,8 +1188,9 @@ async function importCustomerAppCustomersFile(event) {
     const sheets = await readWorkbookAllSheets(file);
     const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false, forceFixedColumns: true });
     const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
-    if (!mirror.ok) state.forceSqliteCallsUntil = Date.now() + 10 * 60 * 1000;
-    await persistDatabase();
+    if (!mirror.ok) throw new Error(mirror.error || "שמירת הלקוחות בשרת נכשלה");
+    const reloaded = await reloadDatabaseFromServer();
+    if (!reloaded) throw new Error("הלקוחות נשמרו בשרת אך רענון הנתונים נכשל");
     state.postgresCallRows = [];
     await renderCalls();
     renderCustomerAppCustomers();
@@ -5961,6 +5962,7 @@ function loadCustomerAppCustomer() {
   status.textContent = "הלקוח נטען";
 }
 
+
 async function saveCustomerAppCustomer() {
   const status = document.getElementById("customer-app-customer-status");
   const customerNo = text(document.getElementById("customer-app-customer-no").value);
@@ -5969,38 +5971,39 @@ async function saveCustomerAppCustomer() {
     status.textContent = "יש להזין מספר ושם לקוח";
     return;
   }
-  const existing = firstRow("SELECT source, days, contact, phone2, city, terms_accepted_at, customer_type FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
-  state.db.run(`
-    INSERT INTO customer_call_profiles (
-      customer_no, customer_name, contact, phone, phone2, city, address, company_id,
-      terms_accepted_at, customer_type, days, source, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(customer_no) DO UPDATE SET
-      customer_name = excluded.customer_name,
-      phone = excluded.phone,
-      address = excluded.address,
-      company_id = excluded.company_id,
-      updated_at = excluded.updated_at
-  `, [
-    customerNo,
-    customerName,
-    existing.contact || "",
-    text(document.getElementById("customer-app-phone").value),
-    existing.phone2 || "",
-    existing.city || "",
-    text(document.getElementById("customer-app-address").value),
-    text(document.getElementById("customer-app-company-id").value),
-    existing.terms_accepted_at || "",
-    existing.customer_type || "existing",
-    existing.days || "",
-    existing.source || "customer_portal",
-    new Date().toISOString(),
-  ]);
-  const result = await persistDatabase();
-  status.textContent = result.server.ok ? "הלקוח נשמר" : "נשמר בדפדפן בלבד";
-  refreshCallCustomerSelect();
-  renderCustomerAppCustomers();
+  const existing = firstRow("SELECT source, days, contact, phone2, city, terms_accepted_at, terms_version_accepted, customer_type FROM customer_call_profiles WHERE customer_no = ?", [customerNo]);
+  status.textContent = "שומר לקוח בשרת...";
+  try {
+    const response = await fetch("/api/postgres/call-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer_no: customerNo,
+        customer_name: customerName,
+        contact: existing.contact || "",
+        phone: text(document.getElementById("customer-app-phone").value),
+        phone2: existing.phone2 || "",
+        city: existing.city || "",
+        address: text(document.getElementById("customer-app-address").value),
+        company_id: text(document.getElementById("customer-app-company-id").value),
+        terms_accepted_at: existing.terms_accepted_at || "",
+        terms_version_accepted: existing.terms_version_accepted || "",
+        customer_type: existing.customer_type || "existing",
+        call_days: existing.days || "",
+        source: existing.source || "customer_portal",
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || "שמירת הלקוח נכשלה");
+    const reloaded = await reloadDatabaseFromServer();
+    if (!reloaded) throw new Error("הלקוח נשמר בשרת אך רענון הנתונים נכשל");
+    status.textContent = "הלקוח נשמר בשרת";
+    refreshCallCustomerSelect();
+    renderCustomerAppCustomers();
+  } catch (error) {
+    console.error(error);
+    status.textContent = error.message || "שמירת הלקוח נכשלה";
+  }
 }
 
 function renderCustomerAppCustomers() {
