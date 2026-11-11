@@ -1069,8 +1069,7 @@ async function importCustomerAppProductsFile(event) {
     const importedProducts = importProductRows(rows);
     await importProductsToPostgres(importedProducts);
     state.invoiceProductIndex = null;
-    const reloaded = await reloadDatabaseFromServer();
-    if (!reloaded) throw new Error("המוצרים נשמרו בשרת אך רענון הנתונים נכשל");
+    await writeBrowserDatabase(state.db.export());
     await refreshAll();
     status.textContent = `נטענו ${integer(importedProducts.length)} מוצרים ונשמרו בשרת`;
     showCustomerAppTab("products");
@@ -1162,12 +1161,12 @@ async function importCallCustomersFile(event) {
   try {
     document.getElementById("calls-import-status").textContent = "קורא קובץ...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false, forceFixedColumns: true });
+    const importedProfiles = importCallCustomerSheets(sheets, { useSheetNameDays: false, forceFixedColumns: false });
     const imported = importedProfiles.length;
+    if (!imported) throw new Error("לא זוהו לקוחות בקובץ. יש לבדוק כותרות עמודות או את מבנה הקובץ.");
     const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
     if (!mirror.ok) throw new Error(mirror.error || "שמירת הלקוחות בשרת נכשלה");
-    const reloaded = await reloadDatabaseFromServer();
-    if (!reloaded) throw new Error("הלקוחות נשמרו בשרת אך רענון הנתונים נכשל");
+    await writeBrowserDatabase(state.db.export());
     await renderCalls();
     document.getElementById("calls-import-status").textContent = `נטענו ${integer(imported)} לקוחות לשיחות (${callProfileDaySummary(importedProfiles)})`;
   } catch (error) {
@@ -1186,11 +1185,11 @@ async function importCustomerAppCustomersFile(event) {
   try {
     status.textContent = "קורא קובץ לקוחות...";
     const sheets = await readWorkbookAllSheets(file);
-    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false, forceFixedColumns: true });
+    const importedProfiles = importCallCustomerSheets(sheets.slice(0, 1), { useSheetNameDays: false, forceFixedColumns: false });
+    if (!importedProfiles.length) throw new Error("לא זוהו לקוחות בקובץ. יש לבדוק כותרות עמודות או את מבנה הקובץ.");
     const mirror = await importCallCustomerProfilesToPostgres(importedProfiles);
     if (!mirror.ok) throw new Error(mirror.error || "שמירת הלקוחות בשרת נכשלה");
-    const reloaded = await reloadDatabaseFromServer();
-    if (!reloaded) throw new Error("הלקוחות נשמרו בשרת אך רענון הנתונים נכשל");
+    await writeBrowserDatabase(state.db.export());
     state.postgresCallRows = [];
     await renderCalls();
     renderCustomerAppCustomers();
@@ -5995,8 +5994,41 @@ async function saveCustomerAppCustomer() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) throw new Error(data.error || "שמירת הלקוח נכשלה");
-    const reloaded = await reloadDatabaseFromServer();
-    if (!reloaded) throw new Error("הלקוח נשמר בשרת אך רענון הנתונים נכשל");
+    state.db.run(`
+      INSERT INTO customer_call_profiles
+      (customer_no, customer_name, contact, phone, phone2, city, address, company_id, terms_accepted_at, terms_version_accepted, customer_type, days, source, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(customer_no) DO UPDATE SET
+        customer_name = excluded.customer_name,
+        contact = excluded.contact,
+        phone = excluded.phone,
+        phone2 = excluded.phone2,
+        city = excluded.city,
+        address = excluded.address,
+        company_id = excluded.company_id,
+        terms_accepted_at = excluded.terms_accepted_at,
+        terms_version_accepted = excluded.terms_version_accepted,
+        customer_type = excluded.customer_type,
+        days = excluded.days,
+        source = excluded.source,
+        updated_at = excluded.updated_at
+    `, [
+      customerNo,
+      customerName,
+      existing.contact || "",
+      text(document.getElementById("customer-app-phone").value),
+      existing.phone2 || "",
+      existing.city || "",
+      text(document.getElementById("customer-app-address").value),
+      text(document.getElementById("customer-app-company-id").value),
+      existing.terms_accepted_at || "",
+      existing.terms_version_accepted || "",
+      existing.customer_type || "existing",
+      existing.days || "",
+      existing.source || "customer_portal",
+      new Date().toISOString(),
+    ]);
+    await writeBrowserDatabase(state.db.export());
     status.textContent = "הלקוח נשמר בשרת";
     refreshCallCustomerSelect();
     renderCustomerAppCustomers();
