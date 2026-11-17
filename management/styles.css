@@ -2673,3 +2673,49 @@ td small {
   max-width: 420px;
   font-weight: 850;
 }
+
+
+/* Reversible missing items in picking */
+.missing-list {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #fff7ed;
+}
+.missing-list-note {
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.missing-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.missing-list-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  background: #fff;
+}
+.missing-product-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.missing-product-main small {
+  color: var(--muted);
+}
+@media (max-width: 700px) {
+  .missing-list-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

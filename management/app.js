@@ -3300,7 +3300,7 @@ function renderPickingByProduct() {
                 ${row.is_carton ? `<small class="pick-note">${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
               </td>
               <td>
-                <button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button>
+                <button class="pick-action pick-missing" data-pick-missing="${row.id}" title="סמן כחסר / הוסר">X</button>
               </td>
             </tr>
           `).join("") : `<tr><td colspan="${showProductColumn ? 5 : 4}" class="empty-state">אין פריטים פתוחים לבחירה הזו</td></tr>`}
@@ -3340,7 +3340,13 @@ function pickingOrderItemsHtml(orderId) {
     WHERE i.order_id = ? AND COALESCE(i.item_status, 'pending') IN ('picked', 'substituted')
     ORDER BY COALESCE(i.action_sequence, i.id), i.id
   `, [orderId]);
-  const pickableRows = [...pending, ...done];
+  const missing = queryRows(`
+    SELECT i.id, i.sku, i.product_desc, i.quantity, i.note, i.is_carton, i.units_per_carton
+    FROM customer_order_items i
+    WHERE i.order_id = ? AND COALESCE(i.item_status, 'pending') = 'missing'
+    ORDER BY COALESCE(i.action_sequence, i.id), i.id
+  `, [orderId]);
+  const pickableRows = [...pending, ...done, ...missing];
   const totalLines = pickableRows.length;
   const totalUnits = pickableRows.reduce((sum, row) => sum + orderLineUnits(row), 0);
   const pendingRows = pending.length ? pending.map((row) => `
@@ -3353,7 +3359,7 @@ function pickingOrderItemsHtml(orderId) {
         ${row.is_carton ? `<small class="pick-note">כמות בקרטונים: ${numberDisplay(row.quantity)} קרטון · ${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון</small>` : ""}
         ${row.note ? `<small class="pick-note">הערת מוצר: ${escapeHtml(row.note)}</small>` : ""}
       </td>
-      <td><button class="pick-action pick-missing" data-pick-missing="${row.id}" title="חסר במלאי">X</button></td>
+      <td><button class="pick-action pick-missing" data-pick-missing="${row.id}" title="סמן כחסר / הוסר">X</button></td>
     </tr>
   `).join("") : `<tr><td colspan="4" class="empty-state">אין מוצרים ממתינים לליקוט</td></tr>`;
   const orderNotes = pending[0]?.order_notes || firstRow("SELECT notes FROM customer_orders WHERE id = ?", [orderId]).notes || "";
@@ -3368,6 +3374,16 @@ function pickingOrderItemsHtml(orderId) {
       <button class="small-action" data-edit-picked="${row.id}">החזר לליקוט</button>
     </li>
   `).join("") : `<li>אין מוצרים שלוקטו עדיין</li>`;
+  const missingRows = missing.length ? missing.map((row) => `
+    <li class="missing-list-item">
+      <span class="missing-product-main">
+        <strong>${escapeHtml(row.product_desc || row.sku)}</strong>
+        <small>מק״ט ${escapeHtml(row.sku || "")} · כמות ${numberDisplay(row.quantity)}${row.is_carton ? ` קרטון (${numberDisplay(row.units_per_carton || 1)} יחידות בקרטון)` : ""}</small>
+        ${row.note ? `<small>הערה: ${escapeHtml(row.note)}</small>` : ""}
+      </span>
+      <button class="secondary-action" data-restore-missing="${row.id}">↩ החזר לליקוט</button>
+    </li>
+  `).join("") : "";
   const canComplete = pending.length === 0 && done.length > 0;
   const order = firstRow("SELECT status FROM customer_orders WHERE id = ?", [orderId]);
   return `
@@ -3385,6 +3401,13 @@ function pickingOrderItemsHtml(orderId) {
         <h3 class="picking-section-title">לוקט</h3>
         <ol>${pickedRows}</ol>
       </div>
+      ${missingRows ? `
+        <div class="missing-list">
+          <h3 class="picking-section-title">הוסרו / חסרים</h3>
+          <p class="missing-list-note">פריטים שסומנו X. אפשר להחזיר אותם לליקוט בלחיצה אחת.</p>
+          <ul>${missingRows}</ul>
+        </div>
+      ` : ""}
       <div class="picking-complete-bar">
         <button class="secondary-action" data-add-picking-product="${orderId}">הוספת מוצר</button>
         <button class="secondary-action" data-pick-all="${orderId}" ${pending.length ? "" : "disabled"}>סמן שלוקט הכל</button>
@@ -3409,6 +3432,7 @@ function bindPickingActions() {
   document.querySelectorAll("[data-pick-missing]").forEach((button) => button.addEventListener("click", () => markPickingItem(button.dataset.pickMissing, "missing")));
   document.querySelectorAll("[data-substitute-item]").forEach((button) => button.addEventListener("click", () => openSubstituteDialog(button.dataset.substituteItem)));
   document.querySelectorAll("[data-edit-picked]").forEach((button) => button.addEventListener("click", () => editPickedItem(button.dataset.editPicked)));
+  document.querySelectorAll("[data-restore-missing]").forEach((button) => button.addEventListener("click", () => restoreMissingItem(button.dataset.restoreMissing)));
   document.querySelectorAll("[data-picked-inline-qty]").forEach((input) => {
     input.addEventListener("focus", () => input.select());
     input.addEventListener("change", () => updatePickedInlineQuantity(input.dataset.pickedInlineQty, input.value));
@@ -3645,6 +3669,22 @@ function openAddPickingProductDialog(orderId) {
   document.getElementById("substitute-modal").classList.remove("hidden");
   renderSubstituteResults();
   document.getElementById("substitute-query").focus();
+}
+
+
+async function restoreMissingItem(itemId) {
+  const row = firstRow("SELECT quantity FROM customer_order_items WHERE id = ?", [itemId]);
+  const pickedQuantity = number(row.quantity);
+  state.db.run(
+    "UPDATE customer_order_items SET item_status = 'pending', picked_quantity = ?, action_sequence = NULL, shortage_dismissed = 0 WHERE id = ?",
+    [pickedQuantity, itemId],
+  );
+  queuePickingChange({ type: "itemPending", itemId, pickedQuantity });
+  renderPicking();
+  const result = await savePickingNow({ silent: true });
+  if (result?.server?.ok === false) {
+    alert("הפריט הוחזר מקומית, אבל הסנכרון לשרת נכשל. יש לנסות שוב.");
+  }
 }
 
 function editPickedItem(itemId) {
