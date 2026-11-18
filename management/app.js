@@ -3727,11 +3727,11 @@ async function manualCompletePickingOrder(orderId) {
     actionSequence,
   }));
   queuePickingChange({ type: "completeOrder", orderId, pickedBy: "ליקוט ידני", pickedAt: now, updatedAt: now });
-  await savePickingNow();
-  state.forceSqliteOrderHistoryUntil = Date.now() + 2 * 60 * 1000;
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
   state.processTab = "orders";
-  renderPicking();
-  renderOrderHistory();
+  renderPicking({ skipRemoteSync: true });
+  renderOrderHistory({ skipRemoteSync: true });
+  await savePickingNow();
 }
 
 async function syncOrderHistoryFromPostgres() {
@@ -4462,6 +4462,10 @@ async function returnOrderToPicking(orderId) {
     itemId: item.id,
     pickedQuantity: number(item.picked_quantity) > 0 ? number(item.picked_quantity) : number(item.quantity),
   }));
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  document.getElementById("process-order-detail").classList.add("hidden");
+  renderOrderHistory({ skipRemoteSync: true });
+  renderPicking({ skipRemoteSync: true });
   await patchPostgresOrder(orderId, {
     status: "מוכן לאיסוף",
     invoice_printed: false,
@@ -4471,9 +4475,6 @@ async function returnOrderToPicking(orderId) {
     updated_at: now,
   });
   await savePickingNow();
-  document.getElementById("process-order-detail").classList.add("hidden");
-  renderOrderHistory();
-  renderPicking();
 }
 
 function exportSavedOrder(orderId) {
@@ -4766,53 +4767,54 @@ async function ensureOrderReadyForShipping(orderId) {
   }
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = ?, updated_at = ? WHERE id = ?", [ORDER_STATUSES[2], now, orderId]);
-  const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: ORDER_STATUSES[2], updated_at: now });
-  await writeBrowserDatabase(state.db.export());
   state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  renderOrderHistory({ skipRemoteSync: true });
+  await writeBrowserDatabase(state.db.export());
+  const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: ORDER_STATUSES[2], updated_at: now });
   return result;
 }
 
 async function unmarkInvoicePrinted(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET invoice_printed = 0, status = 'picked', updated_at = ? WHERE id = ?", [now, orderId]);
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  renderOrderHistory({ skipRemoteSync: true });
+  await writeBrowserDatabase(state.db.export());
   const result = await patchPostgresOrder(orderId, { invoice_printed: false, status: "picked", updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  await writeBrowserDatabase(state.db.export());
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  renderOrderHistory();
 }
 
 async function markInvoicePrinted(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET invoice_printed = 1, status = 'מוכן למשלוח', updated_at = ? WHERE id = ?", [now, orderId]);
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  renderOrderHistory({ skipRemoteSync: true });
+  await writeBrowserDatabase(state.db.export());
   const result = await patchPostgresOrder(orderId, { invoice_printed: true, status: "מוכן למשלוח", updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  await writeBrowserDatabase(state.db.export());
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  renderOrderHistory();
 }
 
 async function markOrderShipped(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET status = 'נשלחה', shipped_at = ?, process_hidden = 0, updated_at = ? WHERE id = ?", [now, now, orderId]);
   state.selectedProcessOrders.delete(String(orderId));
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  renderOrderHistory({ skipRemoteSync: true });
+  await writeBrowserDatabase(state.db.export());
   const result = await patchPostgresOrder(orderId, { status: "נשלחה", shipped_at: now, process_hidden: false, updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  await writeBrowserDatabase(state.db.export());
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  renderOrderHistory();
 }
 
 async function hideProcessOrder(orderId) {
   const now = new Date().toISOString();
   state.db.run("UPDATE customer_orders SET process_hidden = 1, updated_at = ? WHERE id = ?", [now, orderId]);
   state.selectedProcessOrders.delete(String(orderId));
+  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
+  renderOrderHistory({ skipRemoteSync: true });
+  renderPicking({ skipRemoteSync: true });
+  await writeBrowserDatabase(state.db.export());
   const result = await patchPostgresOrder(orderId, { process_hidden: true, updated_at: now });
   if (!result.ok) alert(`השמירה לשרת נכשלה: ${result.error || "שגיאה לא ידועה"}`);
-  await writeBrowserDatabase(state.db.export());
-  state.forceSqliteOrderHistoryUntil = Date.now() + 10 * 60 * 1000;
-  renderOrderHistory();
-  renderPicking();
 }
 
 function refreshCallCustomerSelect() {
